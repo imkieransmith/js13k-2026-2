@@ -11,8 +11,6 @@ Your game's code and assets must be zipped into a .zip archive with ≤ 13,312 b
 
 The archive must contain an index.html file in the top level directory, and it must work in the browser once unzipped, allowing your game to be played straight away.
 
-* 13 × 1024. And yes, you are technically correct — those are kibibytes (KiB).
-
 ### No external resources
 All game assets, data and code must be contained in your .zip.
 
@@ -26,8 +24,8 @@ Our 2 base categories, Desktop and Mobile, are fully covered by these rules.
 
 ### Use the source, Luke!
 The competition focuses on size, but we value knowledge sharing just as much. The submission form will ask you to provide two sources of your game:
-    Playable: your zipped game package,
-    Readable: a GitHub repository with readable, unmangled source code.
+- Playable: your zipped game package,
+- Readable: a GitHub repository with readable, unmangled source code.
 
 Your repository should contain the entire source code needed to actually build your game — not just an unzipped version of it. We clone that repository for posteriority under the js13kGames organization on GitHub as a learning resource for others. You are free to continue working on your game past its submission (we'll have a snapshot of the version you submitted).
 
@@ -88,4 +86,6 @@ Keep the size limit in mind, advise the user and alert them to costly work/direc
 
 Comments aren't included in the final zip file, but are helpful for the "Use the source, Luke!" rule; ensure the use of docblocks and comments throughout, explaining why, not what.
 
-Do not use browser automation or screenshots to check UI work. Run non-visual checks and ask the user to inspect the result.
+Use BEM for class and ID names. Keep styling clustered together and easy to understand/change - a class shouldn't have multiple styling rule blocks across different areas of the style.css file.
+
+Avoid excessive use of browser automation or screenshots to check UI work. Sanity check large changes/work, but prefer to run non-visual checks and ask the user to inspect the result.
