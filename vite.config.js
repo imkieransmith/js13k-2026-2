@@ -1,4 +1,3 @@
-import tailwindcss from '@tailwindcss/vite';
 import { defineConfig } from 'vite';
 
 // js13k ships a zip, not a web server, so every separate file costs twice:
@@ -49,7 +48,7 @@ function inlineEverything() {
 }
 
 export default defineConfig({
-  plugins: [tailwindcss(), inlineEverything()],
+  plugins: [inlineEverything()],
   build: {
     // The entry is opened in whatever the judges are running today, so there
     // is no reason to spend bytes on syntax downlevelling or legacy helpers.
