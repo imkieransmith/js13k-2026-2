@@ -29,6 +29,7 @@ const LASER_WIDTH = 7;
 const MELEE_WINDUP = 0.45;
 const RANGED_WINDUP = 0.62;
 const ENEMY_ATTACK_EFFECT = 0.16;
+const ENEMY_HURT_FLASH = 0.45;
 const ENEMY_ATTACK_REACH = 52;
 const ENEMY_ATTACK_ARC = Math.PI * 0.58;
 const ENEMY_AGGRO = 210;
@@ -46,6 +47,9 @@ let viewWidth = 1;
 let viewHeight = 1;
 let lastTime = performance.now();
 let accumulator = 0;
+let renderScale = 1;
+let renderOffsetX = 0;
+let renderOffsetY = 0;
 
 const player = {
   x: WORLD.width / 2,
@@ -86,7 +90,7 @@ const makeEnemies = () => ENEMY_SPAWNS.map(([x, y, type], id) => ({
   think: id * 0.2, step: 0, cooldown: 0.4 + id * 0.13,
   windup: 0, attackEffect: 0,
   attackDirectionX: 0, attackDirectionY: 1,
-  hurt: 0, death: 0, laserCooldown: 0, knockX: 0, knockY: 0,
+  hurt: 0, hitEffect: 0, death: 0, laserCooldown: 0, knockX: 0, knockY: 0,
 }));
 let enemies = makeEnemies();
 let projectiles = [];
@@ -99,6 +103,12 @@ let gameTime = 0;
 let hudSignature = '';
 
 const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
+// Dynamic sprites are snapped after the camera transform. Rounding them in
+// world space made diagonal fractional movement fight the smoother camera.
+const pixelX = value =>
+  (Math.round(value * renderScale + renderOffsetX) - renderOffsetX) / renderScale;
+const pixelY = value =>
+  (Math.round(value * renderScale + renderOffsetY) - renderOffsetY) / renderScale;
 const moveToward = (value, target, amount) =>
   value < target ? Math.min(value + amount, target) : Math.max(value - amount, target);
 
@@ -318,7 +328,8 @@ function spawnProjectile(enemy) {
 
 function hurtEnemy(enemy, knockX, knockY) {
   enemy.health--;
-  enemy.hurt = 0.16;
+  enemy.hurt = ENEMY_HURT_FLASH;
+  enemy.hitEffect = 0.16;
   enemy.knockX = knockX;
   enemy.knockY = knockY;
   if (!enemy.health) {
@@ -407,6 +418,7 @@ function updateEnemies(dt) {
       continue;
     }
     enemy.hurt = Math.max(0, enemy.hurt - dt);
+    enemy.hitEffect = Math.max(0, enemy.hitEffect - dt);
     enemy.cooldown = Math.max(0, enemy.cooldown - dt);
     enemy.think -= dt;
     const playerX = player.x - enemy.x;
@@ -655,8 +667,8 @@ function drawEnemyTelegraph(enemy, x, y) {
   if (enemy.type) {
     // The warning is the projectile's committed path, not a live tracker.
     for (let distance = 14; distance < 300; distance += 6) {
-      const lineX = Math.round(x + enemy.attackDirectionX * distance);
-      const lineY = Math.round(y + enemy.attackDirectionY * distance);
+      const lineX = pixelX(x + enemy.attackDirectionX * distance);
+      const lineY = pixelY(y + enemy.attackDirectionY * distance);
       ctx.fillRect(lineX - 1, lineY - 1, 3, 3);
     }
   } else {
@@ -668,12 +680,12 @@ function drawEnemyTelegraph(enemy, x, y) {
     for (let angleStep = 0; angleStep < count; angleStep++) {
       const angle = start + ENEMY_ATTACK_ARC * angleStep / (steps - 1);
       for (let distance = 20; distance <= ENEMY_ATTACK_REACH; distance += 8) {
-        const sectorX = Math.round(x + Math.cos(angle) * distance);
-        const sectorY = Math.round(y + Math.sin(angle) * distance);
+        const sectorX = pixelX(x + Math.cos(angle) * distance);
+        const sectorY = pixelY(y + Math.sin(angle) * distance);
         const stamp = freshHit ? 7 : 5;
         ctx.fillRect(
-          Math.floor(sectorX - stamp / 2),
-          Math.floor(sectorY - stamp / 2),
+          sectorX - stamp / 2,
+          sectorY - stamp / 2,
           stamp, stamp,
         );
       }
@@ -687,8 +699,8 @@ function drawEnemyAttack(enemy, x, y) {
   const progress = 1 - enemy.attackEffect / ENEMY_ATTACK_EFFECT;
   // The projectile supplies the travel animation; this is its muzzle burst.
   const distance = 13 + progress * 18;
-  const flashX = Math.round(x + enemy.attackDirectionX * distance);
-  const flashY = Math.round(y + enemy.attackDirectionY * distance);
+  const flashX = pixelX(x + enemy.attackDirectionX * distance);
+  const flashY = pixelY(y + enemy.attackDirectionY * distance);
   ctx.fillStyle = progress < 0.5 ? '#ffc55c' : '#fff3a6';
   ctx.fillRect(flashX - 4, flashY - 4, 9, 9);
   ctx.fillStyle = '#fffaf0';
@@ -704,8 +716,8 @@ function drawImpact(x, y, time, duration, colour) {
   for (let i = 0; i < 8; i++) {
     const angle = Math.PI / 4 * i;
     ctx.fillRect(
-      Math.round(x + Math.cos(angle) * radius) - 2,
-      Math.round(y + Math.sin(angle) * radius) - 2,
+      pixelX(x + Math.cos(angle) * radius) - 2,
+      pixelY(y + Math.sin(angle) * radius) - 2,
       4, 4,
     );
   }
@@ -713,11 +725,11 @@ function drawImpact(x, y, time, duration, colour) {
 }
 
 function drawEnemy(enemy, x, y) {
-  x = Math.round(x);
-  y = Math.round(y);
+  x = pixelX(x);
+  y = pixelY(y);
   if (!enemy.health) ctx.globalAlpha = Math.max(0, enemy.death / 0.24);
+  else if (enemy.hurt && (enemy.hurt * 24 | 0) & 1) ctx.globalAlpha = 0.35;
   const alert = enemy.mode === 1;
-  const flash = enemy.hurt && (enemy.hurt * 40 | 0) & 1;
   ctx.fillStyle = '#38664e';
   ctx.fillRect(x - 9, y + 10, 18, 4);
 
@@ -727,7 +739,7 @@ function drawEnemy(enemy, x, y) {
     ctx.fillRect(x - 12, y + 5, 5, 9);
     ctx.fillRect(x + 7, y + 5, 5, 9);
     ctx.fillRect(x - 11, y - 10, 22, 21);
-    ctx.fillStyle = flash ? '#fffaf0' : '#aeb7a7';
+    ctx.fillStyle = '#aeb7a7';
     ctx.fillRect(x - 8, y - 7, 16, 15);
     ctx.fillStyle = '#dbe0ca';
     ctx.fillRect(x - 7, y - 6, 13, 4);
@@ -739,7 +751,7 @@ function drawEnemy(enemy, x, y) {
     y += bob;
     ctx.fillStyle = '#423b55';
     ctx.fillRect(x - 10, y - 10, 20, 20);
-    ctx.fillStyle = flash ? '#fffaf0' : '#c7cfc1';
+    ctx.fillStyle = '#c7cfc1';
     ctx.fillRect(x - 7, y - 7, 14, 14);
     ctx.fillStyle = '#e5ead7';
     ctx.fillRect(x - 6, y - 6, 11, 4);
@@ -754,8 +766,8 @@ function drawEnemy(enemy, x, y) {
 
 function drawProjectiles(alpha) {
   for (const projectile of projectiles) {
-    const x = Math.round(projectile.previousX + (projectile.x - projectile.previousX) * alpha);
-    const y = Math.round(projectile.previousY + (projectile.y - projectile.previousY) * alpha);
+    const x = pixelX(projectile.previousX + (projectile.x - projectile.previousX) * alpha);
+    const y = pixelY(projectile.previousY + (projectile.y - projectile.previousY) * alpha);
     ctx.fillStyle = '#423b55';
     ctx.fillRect(x - 4, y - 4, 9, 9);
     ctx.fillStyle = '#ffc55c';
@@ -771,12 +783,12 @@ function drawPlayer(playerX, playerY) {
     const colours = ['#f16b9a', '#ffc55c', '#68d48b', '#62b8ed', '#9c78df'];
     ctx.globalAlpha = trail.life / 0.16 * 0.82;
     ctx.fillStyle = colours[i % colours.length];
-    ctx.fillRect(Math.round(trail.x) - 9, Math.round(trail.y) - 11, 18, 22);
+    ctx.fillRect(pixelX(trail.x) - 9, pixelY(trail.y) - 11, 18, 22);
   }
   ctx.globalAlpha = 1;
 
-  const x = Math.round(playerX);
-  const y = Math.round(playerY);
+  const x = pixelX(playerX);
+  const y = pixelY(playerY);
   ctx.globalAlpha = player.invulnerability && (player.invulnerability * 24 | 0) & 1 ? 0.35 : 1;
   ctx.fillStyle = '#38664e';
   ctx.fillRect(x - 8, y + 10, 16, 4);
@@ -794,8 +806,8 @@ function drawLaser(playerX, playerY) {
   const colours = ['#f16b9a', '#ffc55c', '#fff3a6', '#68d48b', '#62b8ed', '#9c78df'];
   ctx.globalAlpha = 0.9;
   for (let distance = 13, stripe = 0; distance < LASER_REACH; distance += 5, stripe++) {
-    const x = Math.round(playerX + laser.directionX * distance);
-    const y = Math.round(playerY + laser.directionY * distance);
+    const x = pixelX(playerX + laser.directionX * distance);
+    const y = pixelY(playerY + laser.directionY * distance);
     ctx.fillStyle = '#342d4b';
     ctx.fillRect(x - 3, y - 3, 7, 7);
     ctx.fillStyle = colours[stripe % colours.length];
@@ -823,8 +835,8 @@ function drawAttack(playerX, playerY) {
   for (let i = 0; i < count; i++) {
     const amount = i / (segments - 1);
     const angle = start + ATTACK_ARC * amount;
-    const x = Math.round(playerX + Math.cos(angle) * radius);
-    const y = Math.round(playerY + Math.sin(angle) * radius);
+    const x = pixelX(playerX + Math.cos(angle) * radius);
+    const y = pixelY(playerY + Math.sin(angle) * radius);
     ctx.fillStyle = '#342d4b';
     ctx.fillRect(x - 3, y - 3, 7, 7);
     ctx.fillStyle = colours[i % colours.length];
@@ -834,8 +846,8 @@ function drawAttack(playerX, playerY) {
 }
 
 function drawAimMarker(aimX, aimY) {
-  const x = Math.round(aimX);
-  const y = Math.round(aimY);
+  const x = pixelX(aimX);
+  const y = pixelY(aimY);
   ctx.fillStyle = '#342d4b';
   ctx.fillRect(x - 4, y - 8, 8, 3);
   ctx.fillRect(x - 4, y + 5, 8, 3);
@@ -862,10 +874,12 @@ function draw() {
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.fillStyle = '#183b64';
   ctx.fillRect(0, 0, screenWidth, screenHeight);
+  renderScale = dpr * zoom;
+  renderOffsetX = Math.round((screenWidth / 2 - cameraX * zoom) * dpr);
+  renderOffsetY = Math.round((screenHeight / 2 - cameraY * zoom) * dpr);
   ctx.setTransform(
-    dpr * zoom, 0, 0, dpr * zoom,
-    Math.round((screenWidth / 2 - cameraX * zoom) * dpr),
-    Math.round((screenHeight / 2 - cameraY * zoom) * dpr)
+    renderScale, 0, 0, renderScale,
+    renderOffsetX, renderOffsetY,
   );
 
   const bounds = visibleBounds(cameraX, cameraY);
@@ -899,7 +913,7 @@ function draw() {
   drawLaser(playerX, playerY);
   drawAttack(playerX, playerY);
   for (const actor of actors) {
-    if (actor.enemy) drawImpact(actor.x, actor.y, actor.enemy.hurt, 0.16, '#fff3a6');
+    if (actor.enemy) drawImpact(actor.x, actor.y, actor.enemy.hitEffect, 0.16, '#fff3a6');
   }
   drawImpact(playerX, playerY, player.hitEffect, 0.18, '#e94863');
   drawAimMarker(aimX, aimY);
