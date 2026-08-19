@@ -1,0 +1,77 @@
+@import "tailwindcss";
+@source not "../AGENTS.md";
+@source not "../.agents";
+@source not "../docs";
+@source not "../TODO.md";
+@source not "./game.js";
+@source not "./style-old.css";
+
+/* Static HTML remains eligible for direct utilities. Excluding prose, JavaScript,
+   and migration references prevents unrelated words from generating CSS. */
+@layer components {
+  /* These small rules keep JavaScript's semantic hooks visibly defined while
+     fixed presentation remains beside the markup that owns it. */
+  .upgrade__row {
+    @apply min-w-0;
+  }
+
+  .upgrade__name {
+    @apply leading-tight;
+  }
+
+  .upgrade__level {
+    @apply whitespace-nowrap;
+  }
+
+  .upgrade__cost {
+    @apply tabular-nums;
+  }
+
+  .upgrade__row--unavailable .upgrade__pennant,
+  .upgrade__row--unavailable .upgrade__copy,
+  .upgrade__row--unavailable .upgrade__cost {
+    @apply opacity-45;
+  }
+}
+
+/* ── Authorised non-Tailwind block ───────────────────────────────
+   The pixel canvas has no stock image-rendering utility. Authorised by Kieran. */
+.scene__canvas {
+  image-rendering: pixelated;
+}
+
+/* ── Authorised non-Tailwind block ───────────────────────────────
+   The notched HUD ribbon requires clip-path. Authorised by Kieran. */
+.hud__upgrade {
+  clip-path: polygon(0 0, 100% 0, 88% 50%, 100% 100%, 0 100%);
+}
+
+/* ── Authorised non-Tailwind block ───────────────────────────────
+   The sprite-sheet portrait needs hard pixel edges. Authorised by Kieran. */
+.profile__image {
+  image-rendering: pixelated;
+}
+
+/* ── Authorised non-Tailwind block ───────────────────────────────
+   The hexagonal close control requires clip-path. Authorised by Kieran. */
+.upgrade__close {
+  clip-path: polygon(25% 7%, 75% 7%, 100% 50%, 75% 93%, 25% 93%, 0 50%);
+}
+
+/* ── Authorised non-Tailwind block ───────────────────────────────
+   Upgrade pennants require clip-path. Authorised by Kieran. */
+.upgrade__pennant {
+  clip-path: polygon(0 0, 100% 0, 100% 100%, 50% 82%, 0 100%);
+}
+
+/* ── Authorised non-Tailwind block ───────────────────────────────
+   Purchase ribbons require clip-path. Authorised by Kieran. */
+.upgrade__button {
+  clip-path: polygon(0 0, 100% 0, 86% 50%, 100% 100%, 0 100%);
+}
+
+/* ── Authorised non-Tailwind block ───────────────────────────────
+   The torn-paper edge requires a repeating gradient. Authorised by Kieran. */
+.upgrade__paper-edge {
+  background: linear-gradient(135deg, var(--color-amber-50) 50%, transparent 51%) 0 0 / 1.5rem 0.75rem repeat-x;
+}
