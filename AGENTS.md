@@ -88,4 +88,8 @@ Comments aren't included in the final zip file, but are helpful for the "Use the
 
 Use BEM for class and ID names. Keep styling clustered together and easy to understand/change - a class shouldn't have multiple styling rule blocks across different areas of the style.css file.
 
+Do not apply CSS styling in the JS if it can be avoided. Prefer adding/removing classes, so all styling can be managed in one place.
+
+Prefer UI/HUD elements in the DOM where possible and sensible.
+
 Avoid excessive use of browser automation or screenshots to check UI work. Sanity check large changes/work, but prefer to run non-visual checks and ask the user to inspect the result.
