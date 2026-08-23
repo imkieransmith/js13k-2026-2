@@ -1,15 +1,18 @@
+import levelSource from './levels/level1.json';
+import { buildTerrain, drawTerrain, moveOnTerrain, terrainHash as hash, unpackLevel } from './terrain.js';
+
 (() => {
 'use strict';
 
 const canvas = document.querySelector('#c');
 const ctx = canvas.getContext('2d');
 const hud = document.querySelector('#hud');
+const level = unpackLevel(levelSource);
 
 // World units are deliberately independent of screen pixels. Keeping the
 // simulation in one coordinate system means camera zoom and device pixel ratio
 // can change without changing how the character handles.
-const WORLD = { width: 2400, height: 1600 };
-const LAND = { left: 72, top: 72, right: WORLD.width - 72, bottom: WORLD.height - 72 };
+const WORLD = { width: level.width, height: level.height };
 const PLAYER_HALF = 10;
 const PLAYER_MAX_HEALTH = 5;
 const MOVE_SPEED = 150;
@@ -52,10 +55,10 @@ let renderOffsetX = 0;
 let renderOffsetY = 0;
 
 const player = {
-  x: WORLD.width / 2,
-  y: WORLD.height / 2,
-  previousX: WORLD.width / 2,
-  previousY: WORLD.height / 2,
+  x: level.player[0],
+  y: level.player[1],
+  previousX: level.player[0],
+  previousY: level.player[1],
   vx: 0,
   vy: 0,
   facingX: 0,
@@ -80,10 +83,7 @@ const aim = {
 const pointer = { x: 0, y: 0, seen: false };
 const attack = { time: 0, cooldown: 0, directionX: 0, directionY: 1, hits: 0 };
 const laser = { charge: 0, held: false, active: false, directionX: 0, directionY: 1 };
-const ENEMY_SPAWNS = [
-  [1040, 700, 0], [1370, 690, 0], [1010, 970, 0], [1390, 980, 0],
-  [820, 800, 1], [1580, 820, 1],
-];
+const ENEMY_SPAWNS = level.enemies;
 const makeEnemies = () => ENEMY_SPAWNS.map(([x, y, type], id) => ({
   id, type, x, y, previousX: x, previousY: y, homeX: x, homeY: y,
   targetX: x, targetY: y, mode: 0, health: type ? 2 : 3,
@@ -94,6 +94,7 @@ const makeEnemies = () => ENEMY_SPAWNS.map(([x, y, type], id) => ({
 }));
 let enemies = makeEnemies();
 let projectiles = [];
+const terrain = buildTerrain(level);
 const held = new Set();
 const trails = [];
 let dashBuffer = 0;
@@ -203,12 +204,9 @@ function updatePlayer(dt) {
     player.vy = moveToward(player.vy, targetY, rate * dt);
   }
 
-  const nextX = clamp(player.x + player.vx * dt, LAND.left + PLAYER_HALF, LAND.right - PLAYER_HALF);
-  const nextY = clamp(player.y + player.vy * dt, LAND.top + PLAYER_HALF, LAND.bottom - PLAYER_HALF);
-  if (nextX === player.x && Math.abs(player.vx) > 0) player.vx = 0;
-  if (nextY === player.y && Math.abs(player.vy) > 0) player.vy = 0;
-  player.x = nextX;
-  player.y = nextY;
+  const blocked = moveOnTerrain(level, player, player.vx * dt, player.vy * dt, PLAYER_HALF);
+  if (blocked & 1) player.vx = 0;
+  if (blocked & 2) player.vy = 0;
 
   for (const trail of trails) trail.life -= dt;
   while (trails[0] && trails[0].life <= 0) trails.shift();
@@ -275,23 +273,22 @@ function moveEnemy(enemy, targetX, targetY, speed, dt) {
   const dx = targetX - enemy.x;
   const dy = targetY - enemy.y;
   const distance = Math.hypot(dx, dy) || 1;
-  enemy.x += (dx / distance * speed + enemy.knockX) * dt;
-  enemy.y += (dy / distance * speed + enemy.knockY) * dt;
+  let moveX = (dx / distance * speed + enemy.knockX) * dt;
+  let moveY = (dy / distance * speed + enemy.knockY) * dt;
   const damping = Math.max(0, 1 - dt * 8);
   enemy.knockX *= damping;
   enemy.knockY *= damping;
 
-  // Aggro movement may use the whole home territory but can never drag a
-  // Construct indefinitely across the map.
-  const homeX = enemy.x - enemy.homeX;
-  const homeY = enemy.y - enemy.homeY;
+  // Clamp the intended destination to its authored home territory, then let
+  // the same terrain collision used by the player slide it around obstacles.
+  const homeX = enemy.x + moveX - enemy.homeX;
+  const homeY = enemy.y + moveY - enemy.homeY;
   const homeDistance = Math.hypot(homeX, homeY);
   if (homeDistance > ENEMY_ROAM) {
-    enemy.x = enemy.homeX + homeX / homeDistance * ENEMY_ROAM;
-    enemy.y = enemy.homeY + homeY / homeDistance * ENEMY_ROAM;
+    moveX = enemy.homeX + homeX / homeDistance * ENEMY_ROAM - enemy.x;
+    moveY = enemy.homeY + homeY / homeDistance * ENEMY_ROAM - enemy.y;
   }
-  enemy.x = clamp(enemy.x, LAND.left + 12, LAND.right - 12);
-  enemy.y = clamp(enemy.y, LAND.top + 12, LAND.bottom - 12);
+  moveOnTerrain(level, enemy, moveX, moveY, 12);
 }
 
 function updateHud() {
@@ -520,14 +517,14 @@ function updateProjectiles(dt) {
       damagePlayer(projectile.x - projectile.vx, projectile.y - projectile.vy);
       return false;
     }
-    return projectile.life > 0 && projectile.x > LAND.left && projectile.x < LAND.right
-      && projectile.y > LAND.top && projectile.y < LAND.bottom;
+    return projectile.life > 0 && projectile.x > 0 && projectile.x < WORLD.width
+      && projectile.y > 0 && projectile.y < WORLD.height;
   });
 }
 
 function resetEncounter() {
-  player.x = player.previousX = WORLD.width / 2;
-  player.y = player.previousY = WORLD.height / 2;
+  player.x = player.previousX = level.player[0];
+  player.y = player.previousY = level.player[1];
   player.vx = player.vy = 0;
   player.health = PLAYER_MAX_HEALTH;
   player.invulnerability = 0.8;
@@ -579,13 +576,6 @@ function update(dt) {
   if (resetQueued) resetEncounter();
 }
 
-// Stable integer noise gives the test map texture without storing map data.
-function hash(x, y) {
-  let value = Math.imul(x, 374761393) + Math.imul(y, 668265263);
-  value = Math.imul(value ^ value >>> 13, 1274126177);
-  return (value ^ value >>> 16) >>> 0;
-}
-
 function visibleBounds(cameraX, cameraY) {
   return {
     left: cameraX - viewWidth / 2,
@@ -593,60 +583,6 @@ function visibleBounds(cameraX, cameraY) {
     right: cameraX + viewWidth / 2,
     bottom: cameraY + viewHeight / 2,
   };
-}
-
-function drawWater(bounds) {
-  ctx.fillStyle = '#296ca3';
-  ctx.fillRect(0, 0, WORLD.width, WORLD.height);
-  ctx.fillStyle = '#3f85b7';
-  const waveTop = 18;
-  const firstY = Math.max(waveTop, waveTop + Math.floor((bounds.top - waveTop) / 28) * 28);
-  for (let y = firstY; y < bounds.bottom; y += 28) {
-    const row = (y - waveTop) / 28;
-    const waveLeft = 8 + (row & 1) * 24;
-    const firstX = Math.max(waveLeft, waveLeft + Math.floor((bounds.left - waveLeft) / 64) * 64);
-    for (let x = firstX; x < bounds.right; x += 64) ctx.fillRect(x, y, 17, 2);
-  }
-}
-
-function drawLand(bounds) {
-  // Layered rims make the rectangle read as a raised plateau viewed from
-  // above rather than as a flat screen-space panel.
-  ctx.fillStyle = '#c9dc91';
-  ctx.fillRect(LAND.left - 14, LAND.top - 14, LAND.right - LAND.left + 28, LAND.bottom - LAND.top + 28);
-  ctx.fillStyle = '#72ad62';
-  ctx.fillRect(LAND.left - 5, LAND.top - 5, LAND.right - LAND.left + 16, LAND.bottom - LAND.top + 17);
-  ctx.fillStyle = '#82c96b';
-  ctx.fillRect(LAND.left, LAND.top, LAND.right - LAND.left, LAND.bottom - LAND.top);
-
-  const tile = 48;
-  // Cull against the grid's own origin. Using world zero here would change
-  // the tile sequence once an edge left the view, visibly shifting the floor.
-  const startX = Math.max(LAND.left, LAND.left + Math.floor((bounds.left - LAND.left) / tile) * tile);
-  const startY = Math.max(LAND.top, LAND.top + Math.floor((bounds.top - LAND.top) / tile) * tile);
-  for (let y = startY; y < Math.min(bounds.bottom, LAND.bottom); y += tile) {
-    for (let x = startX; x < Math.min(bounds.right, LAND.right); x += tile) {
-      const noise = hash(x / tile, y / tile);
-      ctx.fillStyle = noise & 1 ? '#7fc468' : '#84ca6d';
-      ctx.fillRect(x, y, Math.min(tile, LAND.right - x), Math.min(tile, LAND.bottom - y));
-      if (noise % 4 === 0) {
-        ctx.fillStyle = '#5eae5a';
-        ctx.fillRect(x + 9 + noise % 25, y + 11 + (noise >>> 8) % 24, 2, 6);
-        ctx.fillRect(x + 7 + noise % 25, y + 15 + (noise >>> 8) % 24, 6, 2);
-      }
-    }
-  }
-
-  // Repeating old stones give the camera clear landmarks near every edge.
-  ctx.fillStyle = '#dae0ca';
-  for (let x = LAND.left + 38; x < LAND.right; x += 150) {
-    ctx.fillRect(x, LAND.top - 22, 24, 14);
-    ctx.fillRect(x, LAND.bottom + 8, 24, 14);
-  }
-  for (let y = LAND.top + 45; y < LAND.bottom; y += 150) {
-    ctx.fillRect(LAND.left - 22, y, 14, 24);
-    ctx.fillRect(LAND.right + 8, y, 14, 24);
-  }
 }
 
 function drawEnemyTelegraph(enemy, x, y) {
@@ -883,8 +819,7 @@ function draw() {
   );
 
   const bounds = visibleBounds(cameraX, cameraY);
-  drawWater(bounds);
-  drawLand(bounds);
+  drawTerrain(ctx, terrain, bounds, gameTime);
   for (const enemy of enemies) {
     drawEnemyTelegraph(
       enemy,

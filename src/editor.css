@@ -1,0 +1,22 @@
+*{box-sizing:border-box}
+html,body{width:100%;height:100%;margin:0;overflow:hidden;background:#101a2c;color:#fff3d2;font:12px/1.4 ui-monospace,monospace}
+button,input{font:inherit}
+.editor__workspace{position:relative;width:100%;height:100%}
+.editor__canvas{display:block;width:100%;height:100%;image-rendering:pixelated;cursor:crosshair;touch-action:none}
+.editor__panel{position:absolute;left:16px;top:16px;width:230px;padding:14px;background:#18233eee;border:2px solid #344665;box-shadow:5px 5px 0 #0a1020}
+.editor__title{margin:0 0 10px;color:#fff3a6;font-size:13px;letter-spacing:.18em}
+.editor__tools{display:grid;grid-template-columns:1fr 1fr;gap:5px}
+.editor__tool,.editor__button{min-height:30px;border:1px solid #536582;background:#293955;color:#dce7ee;cursor:pointer}
+.editor__tool:hover,.editor__button:hover{border-color:#8eb9d3}
+.editor__tool.is-active{border-color:#fff3a6;background:#527f50;color:#fff}
+.editor__tool--erase.is-active{background:#a63f56}
+.editor__tool kbd{float:right;color:#9bb0c5;font-size:9px}
+.editor__field{display:grid;grid-template-columns:1fr 1fr 28px;align-items:center;gap:7px;margin-top:13px;color:#b8c7d5}
+.editor__field input{width:100%}
+.editor__field output{text-align:right;color:#fff3a6}
+.editor__check{display:block;margin:11px 0;color:#b8c7d5}
+.editor__row{display:flex;align-items:center;gap:5px;margin-top:6px}
+.editor__button{flex:1;padding:5px}
+.editor__seed{min-width:28px;color:#fff3a6;text-align:center}
+.editor__help{margin:12px 0 6px;color:#8fa4bb}
+.editor__status{min-height:17px;margin:0;color:#68d48b}

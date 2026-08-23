@@ -1,3 +1,4 @@
+import { writeFile } from 'node:fs/promises';
 import { defineConfig } from 'vite';
 
 // js13k ships a zip, not a web server, so every separate file costs twice:
@@ -5,6 +6,38 @@ import { defineConfig } from 'vite';
 // file is deflated as its own stream and cannot reuse the others' dictionary.
 // Folding the CSS and JS back into index.html leaves a single entry that
 // compresses as one continuous block.
+// Local authoring convenience only. The production build has no editor entry,
+// and this middleware is never emitted into the game archive.
+function saveLevel() {
+  return {
+    name: 'save-level',
+    configureServer(server) {
+      server.middlewares.use('/__save-level', (request, response) => {
+        if (request.method !== 'POST') {
+          response.statusCode = 405;
+          return response.end();
+        }
+        let body = '';
+        request.setEncoding('utf8');
+        request.on('data', chunk => {
+          body += chunk;
+          if (body.length > 200000) request.destroy();
+        });
+        request.on('end', async () => {
+          try {
+            JSON.parse(body);
+            await writeFile(new URL('./src/levels/level1.json', import.meta.url), body);
+            response.statusCode = 204;
+          } catch {
+            response.statusCode = 400;
+          }
+          response.end();
+        });
+      });
+    },
+  };
+}
+
 function inlineEverything() {
   return {
     name: 'inline-everything',
@@ -48,7 +81,7 @@ function inlineEverything() {
 }
 
 export default defineConfig({
-  plugins: [inlineEverything()],
+  plugins: [saveLevel(), inlineEverything()],
   build: {
     // The entry is opened in whatever the judges are running today, so there
     // is no reason to spend bytes on syntax downlevelling or legacy helpers.

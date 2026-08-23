@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Unicorn Drifter — Terrain Editor</title>
+<link rel="stylesheet" href="/src/editor.css">
+</head>
+<body class="editor">
+<main class="editor__workspace">
+  <canvas id="editor-canvas" class="editor__canvas"></canvas>
+  <aside class="editor__panel" aria-label="Terrain tools">
+    <h1 class="editor__title">TERRAIN</h1>
+    <div class="editor__tools" role="group" aria-label="Brush type">
+      <button class="editor__tool is-active" data-kind="grass">Grass <kbd>1</kbd></button>
+      <button class="editor__tool" data-kind="dirt">Dirt <kbd>2</kbd></button>
+      <button class="editor__tool" data-kind="water">Water <kbd>3</kbd></button>
+      <button class="editor__tool" data-kind="stones">Stones <kbd>4</kbd></button>
+      <button class="editor__tool" data-kind="ruins">Ruins <kbd>5</kbd></button>
+      <button class="editor__tool" data-kind="collision">Collision <kbd>6</kbd></button>
+      <button class="editor__tool editor__tool--erase" data-action="erase">Erase <kbd>E</kbd></button>
+    </div>
+    <label class="editor__field">Brush radius
+      <input id="editor-radius" type="range" min="8" max="160" step="4" value="52">
+      <output id="editor-radius-value">52</output>
+    </label>
+    <label class="editor__check"><input id="editor-collision" type="checkbox" checked> Show collision</label>
+    <div class="editor__row">
+      <button class="editor__button" data-action="regen">Regen seed</button>
+      <span id="editor-seed" class="editor__seed"></span>
+    </div>
+    <div class="editor__row">
+      <button class="editor__button" data-action="undo">Undo</button>
+      <button class="editor__button" data-action="redo">Redo</button>
+    </div>
+    <div class="editor__row">
+      <button class="editor__button" data-action="load">Reload</button>
+      <button class="editor__button" data-action="save">Save</button>
+      <button class="editor__button" data-action="download">Download</button>
+    </div>
+    <p class="editor__help">LMB paint · RMB erase · middle/Space drag pan · wheel zoom · [ ] radius</p>
+    <p id="editor-status" class="editor__status" role="status">Ready</p>
+  </aside>
+</main>
+<script type="module" src="/src/editor.js"></script>
+</body>
+</html>
