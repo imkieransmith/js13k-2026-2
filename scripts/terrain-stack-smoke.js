@@ -416,6 +416,10 @@ function drawWalls(raster, level) {
     if (!hasWall(x, y)) continue;
     const worldX = x * TILE;
     const baseline = (y + 2) * TILE;
+    if (hasWall(x, y + 1)) {
+      raster.rect(worldX, y * TILE, TILE, TILE, [77, 102, 99]);
+      continue;
+    }
     raster.rect(worldX, baseline - 64, TILE, 32, [123, 146, 137]);
     raster.rect(worldX, baseline - 32, TILE, 32, [77, 102, 99]);
     raster.rect(worldX, baseline - 64, TILE, 3, [231, 232, 203]);

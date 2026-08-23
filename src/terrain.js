@@ -460,18 +460,23 @@ function drawWalls(image, level, walls) {
     const index = tileIndex(level, x, y);
     return index < 0 ? 0 : walls[index];
   };
-  // A stack tile anchors the top half of a two-tile-high wall. Every row emits
-  // its own sprite in painter order; neighbours only join horizontal seams.
+  // Joined rows are solid mass; only each exposed southern row emits the
+  // two-tile facade and its pale lip, avoiding repeated horizontal stripes.
   for (let y = 0; y < level.tileHeight; y++) for (let x = 0; x < level.tileWidth; x++) {
     if (!wallAt(x, y)) continue;
     const worldX = x * AUTHOR_TILE;
     const worldY = y * AUTHOR_TILE;
-    fillRect(image, worldX, worldY, AUTHOR_TILE, 32, [123, 146, 137]);
-    fillRect(image, worldX, worldY + 32, AUTHOR_TILE, 31, [77, 102, 99]);
-    fillRect(image, worldX, worldY, AUTHOR_TILE, 3, [231, 232, 203]);
-    fillRect(image, worldX, worldY + 63, AUTHOR_TILE, 2, [46, 68, 70]);
-    if (!wallAt(x - 1, y)) fillRect(image, worldX, worldY, 3, 63, [190, 201, 180]);
-    if (!wallAt(x + 1, y)) fillRect(image, worldX + AUTHOR_TILE - 3, worldY, 3, 63, [190, 201, 180]);
+    const facade = !wallAt(x, y + 1);
+    fillRect(image, worldX, worldY, AUTHOR_TILE, 32, [77, 102, 99]);
+    if (facade) {
+      fillRect(image, worldX, worldY, AUTHOR_TILE, 32, [123, 146, 137]);
+      fillRect(image, worldX, worldY + 32, AUTHOR_TILE, 31, [77, 102, 99]);
+      fillRect(image, worldX, worldY, AUTHOR_TILE, 3, [231, 232, 203]);
+      fillRect(image, worldX, worldY + 63, AUTHOR_TILE, 2, [46, 68, 70]);
+    }
+    const height = facade ? 63 : 32;
+    if (!wallAt(x - 1, y)) fillRect(image, worldX, worldY, 3, height, [190, 201, 180]);
+    if (!wallAt(x + 1, y)) fillRect(image, worldX + AUTHOR_TILE - 3, worldY, 3, height, [190, 201, 180]);
   }
 }
 
