@@ -819,7 +819,7 @@ function draw() {
   );
 
   const bounds = visibleBounds(cameraX, cameraY);
-  drawTerrain(ctx, terrain, bounds, gameTime);
+  drawTerrain(ctx, terrain, bounds);
   for (const enemy of enemies) {
     drawEnemyTelegraph(
       enemy,

@@ -2,7 +2,8 @@
 // Authored masks say where a material belongs; these deterministic recipes add
 // the variation. Cosmetic noise never participates in collision.
 export const MASK_CELL = 8;
-export const TERRAIN_KINDS = ['grass', 'dirt', 'water', 'stones', 'ruins', 'collision'];
+export const AUTHOR_TILE = 32;
+export const TERRAIN_KINDS = ['grass', 'dirt', 'water', 'stones', 'ruins', 'bushes', 'collision'];
 const CACHE_SCALE = 1;
 
 /** Stable integer hash. Coordinates and salts always produce the same detail. */
@@ -150,9 +151,71 @@ export function paintCircle(level, kind, worldX, worldY, radius, value = 1) {
   return changed;
 }
 
+function gridBlock(level, gridX, gridY, size) {
+  const span = size / level.cell;
+  return { x: gridX * span, y: gridY * span, span };
+}
+
+/** Majority occupancy lets old freehand masks migrate predictably to tiles. */
+export function gridAt(level, kind, gridX, gridY, size = AUTHOR_TILE) {
+  const block = gridBlock(level, gridX, gridY, size);
+  if (block.x < 0 || block.y < 0 || block.x >= level.gridWidth || block.y >= level.gridHeight) return 0;
+  let count = 0;
+  let total = 0;
+  for (let y = block.y; y < Math.min(level.gridHeight, block.y + block.span); y++) {
+    for (let x = block.x; x < Math.min(level.gridWidth, block.x + block.span); x++) {
+      count += bitAt(level.masks[kind], cellIndex(level, x, y));
+      total++;
+    }
+  }
+  return count * 2 >= total ? 1 : 0;
+}
+
+/** Set one whole authoring cell while preserving every other layer. */
+export function paintGridCell(level, kind, gridX, gridY, value = 1, size = AUTHOR_TILE) {
+  const block = gridBlock(level, gridX, gridY, size);
+  if (block.x < 0 || block.y < 0 || block.x >= level.gridWidth || block.y >= level.gridHeight) return false;
+  let changed = false;
+  for (let y = block.y; y < Math.min(level.gridHeight, block.y + block.span); y++) {
+    for (let x = block.x; x < Math.min(level.gridWidth, block.x + block.span); x++) {
+      const index = cellIndex(level, x, y);
+      if (bitAt(level.masks[kind], index) === value) continue;
+      setBit(level.masks[kind], index, value);
+      changed = true;
+    }
+  }
+  return changed;
+}
+
+export function paintGridRect(level, kind, x0, y0, x1, y1, value = 1, size = AUTHOR_TILE) {
+  let changed = false;
+  for (let y = Math.min(y0, y1); y <= Math.max(y0, y1); y++) {
+    for (let x = Math.min(x0, x1); x <= Math.max(x0, x1); x++) {
+      changed = paintGridCell(level, kind, x, y, value, size) || changed;
+    }
+  }
+  return changed;
+}
+
+/** One-time/editor migration of legacy partial material cells. */
+export function normaliseGrid(level, kinds = TERRAIN_KINDS.slice(0, -1), size = AUTHOR_TILE) {
+  const width = Math.ceil(level.width / size);
+  const height = Math.ceil(level.height / size);
+  for (const kind of kinds) {
+    const values = Array.from({ length: width * height }, (_, index) =>
+      gridAt(level, kind, index % width, index / width | 0, size));
+    for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) {
+      paintGridCell(level, kind, x, y, values[y * width + x], size);
+    }
+  }
+  return level;
+}
+
 function pointWalkable(level, x, y) {
   if (x < 0 || y < 0 || x >= level.width || y >= level.height) return false;
-  const land = maskAt(level, 'grass', x, y) || maskAt(level, 'dirt', x, y);
+  const land = maskAt(level, 'grass', x, y)
+    || maskAt(level, 'dirt', x, y)
+    || maskAt(level, 'ruins', x, y);
   return !!land && !maskAt(level, 'water', x, y) && !maskAt(level, 'collision', x, y);
 }
 
@@ -215,14 +278,22 @@ const PALETTE = [
   [128, 91, 60], [207, 211, 188],
 ];
 
+function organicCoverage(level, mask, worldX, worldY, salt) {
+  const value = coverage(level, mask, worldX, worldY);
+  // Complete tile interiors remain exact; only the interpolated boundary band
+  // receives stable pixel-scale erosion and encroachment.
+  return value > 0.02 && value < 0.98
+    ? value + (fieldNoise(worldX / 5, worldY / 5, level.seed + salt) - 0.5) * 0.42
+    : value;
+}
+
 function surfaceField(level, worldX, worldY) {
-  const noise = (fieldNoise(worldX / 42, worldY / 42, level.seed) - 0.5) * 0.27;
   const land = Math.max(
-    coverage(level, level.masks.grass, worldX, worldY),
-    coverage(level, level.masks.dirt, worldX, worldY),
-  ) + noise;
-  const pool = coverage(level, level.masks.water, worldX, worldY)
-    + (fieldNoise(worldX / 34, worldY / 34, level.seed + 17) - 0.5) * 0.2;
+    organicCoverage(level, level.masks.grass, worldX, worldY, 7),
+    organicCoverage(level, level.masks.dirt, worldX, worldY, 11),
+    organicCoverage(level, level.masks.ruins, worldX, worldY, 13),
+  );
+  const pool = organicCoverage(level, level.masks.water, worldX, worldY, 17);
   return Math.min(land, 1 - pool);
 }
 
@@ -232,12 +303,9 @@ function materialAt(level, worldX, worldY) {
   if (surface > 0.56) {
     // Ruin paint describes a connected floor mass. Higher-frequency field
     // variation chips its edge without breaking the authored coverage apart.
-    const ruin = coverage(level, level.masks.ruins, worldX, worldY)
-      + (fieldNoise(worldX / 18, worldY / 18, level.seed + 43) - 0.5) * 0.28;
-    if (ruin > 0.5) return 5;
-    const dirt = coverage(level, level.masks.dirt, worldX, worldY)
-      + (fieldNoise(worldX / 22, worldY / 22, level.seed + 29) - 0.5) * 0.34;
-    return dirt > 0.52 ? 4 : 3;
+    if (organicCoverage(level, level.masks.ruins, worldX, worldY, 43) > 0.5) return 5;
+    if (organicCoverage(level, level.masks.dirt, worldX, worldY, 29) > 0.5) return 4;
+    return 3;
   }
   if (surface > 0.34) return 1;
   // Only lower/southern edges receive a deep shelf in the 3/4 projection.
@@ -253,19 +321,19 @@ function scatter(context, level, kind, recipe) {
     for (let x = 0; x < level.gridWidth; x++) {
       if (!bitAt(mask, y * level.gridWidth + x)) continue;
       for (let i = 0; i < count; i++) {
-        // One low-frequency field creates clumps and, importantly, broad quiet
-        // patches. Uniform random detail made every material equally noisy.
-        const density = Math.max(0, Math.min(1,
-          (fieldNoise(x / 10, y / 10, level.seed + kind.length * 31) - 0.32) * 2));
+        // A low-frequency field still clusters debris, but the non-zero floor
+        // ensures a painted stone tile reliably produces visible fragments.
+        const density = 0.35
+          + fieldNoise(x / 10, y / 10, level.seed + kind.length * 31) * 0.65;
         if (random(x, y, level.seed + i * 19 + kind.length) > keep * density) continue;
-        const worldX = x * level.cell + random(x, y, level.seed + i * 31) * level.cell;
-        const worldY = y * level.cell + random(x, y, level.seed + i * 47) * level.cell;
+        const worldX = Math.round(x * level.cell + random(x, y, level.seed + i * 31) * level.cell);
+        const worldY = Math.round(y * level.cell + random(x, y, level.seed + i * 47) * level.cell);
         const dirt = maskAt(level, 'dirt', worldX, worldY);
         if (maskAt(level, 'water', worldX, worldY)
-          || !(maskAt(level, 'grass', worldX, worldY) || dirt)
+          || !(maskAt(level, 'grass', worldX, worldY) || dirt || maskAt(level, 'ruins', worldX, worldY))
           || kind === 'grass' && dirt && random(x, y, i + 59) > 0.14) continue;
-        const w = width * (0.7 + random(x, y, i + 71) * 0.6);
-        const h = height * (0.7 + random(x, y, i + 89) * 0.6);
+        const w = Math.max(2, Math.round(width * (0.7 + random(x, y, i + 71) * 0.6)));
+        const h = Math.max(2, Math.round(height * (0.7 + random(x, y, i + 89) * 0.6)));
         if (shadow) {
           context.fillStyle = shadow;
           context.fillRect(worldX + 1, worldY + 2, w, h);
@@ -283,82 +351,59 @@ const stoneAt = (level, x, y) => materialAt(level, x, y) > 4;
 function drawRuins(context, level) {
   // Broken tile seams communicate one architectural platform rather than a
   // collection of independently scattered props.
-  const tile = 24;
+  const tile = AUTHOR_TILE;
+  const last = tile - 4;
   context.fillStyle = '#aab3a7';
   for (let y = 0; y < level.height; y += tile) for (let x = 0; x < level.width; x += tile) {
-    if (!stoneAt(level, x + 12, y + 12)) continue;
-    const complete = stoneAt(level, x + 3, y + 3) && stoneAt(level, x + 20, y + 20);
+    if (!stoneAt(level, x + tile / 2, y + tile / 2)) continue;
+    const complete = stoneAt(level, x + 3, y + 3) && stoneAt(level, x + last, y + last);
     if (complete && random(x / tile, y / tile, level.seed + 207) > 0.78) {
       context.fillStyle = '#c0c8b5';
-      context.fillRect(x + 2, y + 2, 20, 20);
+      context.fillRect(x + 2, y + 2, tile - 4, tile - 4);
       context.fillStyle = '#aab3a7';
     }
-    if (stoneAt(level, x + 3, y + 2) && stoneAt(level, x + 20, y + 2)) {
-      context.fillRect(x + 3, y + 1, 17, 1);
+    if (stoneAt(level, x + 3, y + 2) && stoneAt(level, x + last, y + 2)) {
+      context.fillRect(x + 3, y + 1, tile - 7, 1);
     }
-    if (stoneAt(level, x + 2, y + 3) && stoneAt(level, x + 2, y + 20)) {
-      context.fillRect(x + 1, y + 3, 1, 17);
+    if (stoneAt(level, x + 2, y + 3) && stoneAt(level, x + 2, y + last)) {
+      context.fillRect(x + 1, y + 3, 1, tile - 7);
     }
-    if (random(x / tile, y / tile, level.seed + 211) > 0.82) {
-      context.fillStyle = '#efebc6';
-      context.fillRect(x + 7, y + 7, 7, 2);
-      context.fillStyle = '#aab3a7';
-    }
-  }
-
-  // Rare low remnants sit on the same lattice and share the floor material.
-  const block = 4;
-  for (let y = 0; y < level.gridHeight; y += block) for (let x = 0; x < level.gridWidth; x += block) {
-    const centreX = (x + block / 2) * level.cell;
-    const centreY = (y + block / 2) * level.cell;
-    if (!stoneAt(level, centreX, centreY) || random(x, y, level.seed + 223) > 0.14) continue;
-    let width = 20 + random(x, y, 227) * 14;
-    let height = 5 + random(x, y, 229) * 4;
-    if (fieldNoise(x / 12, y / 12, level.seed + 233) < 0.5) [width, height] = [height, width];
-    if (!stoneAt(level, centreX - width * 0.4, centreY - height * 0.4)
-      || !stoneAt(level, centreX + width * 0.4, centreY + height * 0.4)) continue;
-    const left = centreX - width / 2;
-    const top = centreY - height / 2;
-    context.fillStyle = '#4b5960';
-    context.fillRect(left + 2, top + 4, width, height);
-    context.fillStyle = '#d8d8bd';
-    context.fillRect(left, top, width, height - 1);
-    context.fillStyle = '#efebc6';
-    context.fillRect(left + 2, top + 1, Math.max(2, width - 5), 2);
-    context.fillStyle = '#84918c';
-    if (width > height) context.fillRect(left + width * 0.6, top + 2, 1, height - 3);
-    else context.fillRect(left + 2, top + height * 0.6, width - 3, 1);
   }
 }
 
-/** Large growth clumps sit at architecture edges instead of noisy field-wide blades. */
-function drawGrowth(context, level) {
-  for (let y = 2; y < level.gridHeight - 2; y += 2) for (let x = 2; x < level.gridWidth - 2; x += 2) {
-    if (!bitAt(level.masks.ruins, cellIndex(level, x, y))) continue;
-    const edge = !bitAt(level.masks.ruins, cellIndex(level, x - 2, y))
-      || !bitAt(level.masks.ruins, cellIndex(level, x + 2, y))
-      || !bitAt(level.masks.ruins, cellIndex(level, x, y - 2))
-      || !bitAt(level.masks.ruins, cellIndex(level, x, y + 2));
-    if (!edge || random(x, y, level.seed + 277) > 0.16) continue;
-    const worldX = x * level.cell;
-    const worldY = y * level.cell;
-    if (maskAt(level, 'water', worldX, worldY)) continue;
-    const size = 8 + random(x, y, 281) * 8;
-    context.fillStyle = '#286d3d';
-    context.fillRect(worldX - size, worldY, size * 1.8, size * 0.65);
-    context.fillStyle = '#469a45';
-    context.fillRect(worldX - size * 0.8, worldY - size * 0.55, size * 0.8, size);
-    context.fillRect(worldX - size * 0.15, worldY - size * 0.85, size * 0.75, size * 1.15);
-    context.fillRect(worldX + size * 0.35, worldY - size * 0.4, size * 0.6, size * 0.75);
-    context.fillStyle = '#91c857';
-    context.fillRect(worldX - size * 0.45, worldY - size * 0.45, size * 0.55, 3);
-    context.fillRect(worldX + size * 0.15, worldY - size * 0.7, 3, size * 0.45);
+/** Bush paint scatters crisp multi-lobed growth independently of floor paint. */
+function drawBushes(context, level) {
+  const pixelRect = (x, y, width, height) => context.fillRect(
+    Math.round(x), Math.round(y), Math.max(1, Math.round(width)), Math.max(1, Math.round(height)),
+  );
+  const width = level.width / AUTHOR_TILE;
+  const height = level.height / AUTHOR_TILE;
+  for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) {
+    if (!gridAt(level, 'bushes', x, y)) continue;
+    for (let i = 0; i < 2; i++) {
+      if (random(x, y, level.seed + i * 17 + 277) > 0.75) continue;
+      const worldX = Math.round((x + random(x, y, i * 23 + 281)) * AUTHOR_TILE);
+      const worldY = Math.round((y + random(x, y, i * 29 + 283)) * AUTHOR_TILE);
+      if (maskAt(level, 'water', worldX, worldY)
+        || !(maskAt(level, 'grass', worldX, worldY)
+          || maskAt(level, 'dirt', worldX, worldY)
+          || maskAt(level, 'ruins', worldX, worldY))) continue;
+      const size = Math.round(7 + random(x, y, i * 31 + 287) * 6);
+      context.fillStyle = '#286d3d';
+      pixelRect(worldX - size, worldY, size * 1.8, size * 0.65);
+      context.fillStyle = '#469a45';
+      pixelRect(worldX - size * 0.8, worldY - size * 0.55, size * 0.8, size);
+      pixelRect(worldX - size * 0.15, worldY - size * 0.85, size * 0.75, size * 1.15);
+      pixelRect(worldX + size * 0.35, worldY - size * 0.4, size * 0.6, size * 0.75);
+      context.fillStyle = '#91c857';
+      pixelRect(worldX - size * 0.45, worldY - size * 0.45, size * 0.55, 3);
+      pixelRect(worldX + size * 0.15, worldY - size * 0.7, 3, size * 0.45);
+    }
   }
 }
 
 /** Bake static terrain once at one canvas pixel per world pixel. */
-export function buildTerrain(level, scale = CACHE_SCALE) {
-  const canvas = document.createElement('canvas');
+export function buildTerrain(level, scale = CACHE_SCALE, canvas = document.createElement('canvas')) {
   canvas.width = Math.ceil(level.width / scale);
   canvas.height = Math.ceil(level.height / scale);
   const context = canvas.getContext('2d');
@@ -379,38 +424,24 @@ export function buildTerrain(level, scale = CACHE_SCALE) {
   context.putImageData(image, 0, 0);
   context.setTransform(1 / scale, 0, 0, 1 / scale, 0, 0);
   drawRuins(context, level);
-  drawGrowth(context, level);
-  scatter(context, level, 'stones', [1, 0.08, 3, 2, '#b9c2b7', '#87948e', '#56656a']);
+  drawBushes(context, level);
+  scatter(context, level, 'stones', [1, 0.18, 3, 2, '#b9c2b7', '#87948e', '#56656a']);
   return { canvas, level, scale };
 }
 
-/** Draw only the visible part of the static cache, then cheap animated water streaks. */
-export function drawTerrain(context, terrain, bounds, time = 0) {
-  const { canvas, level, scale } = terrain;
+/** Draw only the visible part of the static terrain cache. */
+export function drawTerrain(context, terrain, bounds) {
+  const { canvas, scale } = terrain;
   const sx = Math.max(0, Math.floor(bounds.left / scale));
   const sy = Math.max(0, Math.floor(bounds.top / scale));
   const ex = Math.min(canvas.width, Math.ceil(bounds.right / scale));
   const ey = Math.min(canvas.height, Math.ceil(bounds.bottom / scale));
   context.imageSmoothingEnabled = false;
   context.drawImage(canvas, sx, sy, ex - sx, ey - sy, sx * scale, sy * scale, (ex - sx) * scale, (ey - sy) * scale);
-
-  context.fillStyle = '#58a7c0';
-  const firstY = Math.floor(bounds.top / 46) * 46;
-  const shift = time * 4 % 74;
-  for (let y = firstY; y < bounds.bottom; y += 46) {
-    const firstX = Math.floor((bounds.left - shift) / 74) * 74 + shift;
-    for (let x = firstX; x < bounds.right; x += 74) {
-      const cellX = x / 74 | 0;
-      const cellY = y / 46 | 0;
-      if (random(cellX, cellY, level.seed + 307) > 0.5) continue;
-      const waveX = x + random(cellX, cellY, 311) * 18;
-      const waveY = y + random(cellX, cellY, 313) * 12;
-      if (!materialAt(level, waveX, waveY)) {
-        context.fillRect(waveX, waveY, 8 + random(cellX, cellY, 317) * 10, 1);
-      }
-    }
-  }
 }
+
+/** Material sampling is exported for deterministic editor/runtime smoke checks. */
+export const terrainMaterialAt = materialAt;
 
 /** Pure deterministic signature used by the Node smoke test. */
 export function terrainSignature(level) {
