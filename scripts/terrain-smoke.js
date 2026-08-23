@@ -18,6 +18,7 @@ import {
   terrainMaterialAt,
   terrainSignature,
   unpackLevel,
+  wallSouthAt,
 } from '../src/terrain.js';
 
 const source = JSON.parse(await readFile('src/levels/level1.json', 'utf8'));
@@ -25,6 +26,7 @@ const level = unpackLevel(source);
 const rebuilt = unpackLevel(packLevel(level));
 
 if (level.gridWidth !== 300 || level.gridHeight !== 200) throw Error('Unexpected terrain grid');
+if (!source.masks.walls && level.masks.walls.some(Boolean)) throw Error('Legacy level decoded phantom walls');
 for (const kind of TERRAIN_KINDS) {
   if (level.masks[kind].length !== rebuilt.masks[kind].length) throw Error(`${kind} length changed`);
   for (let i = 0; i < level.masks[kind].length; i++) {
@@ -87,8 +89,38 @@ paintGridCell(blank, 'ruins', 0, 0, 1);
 if (!isWalkable(blank, 16, 16)) throw Error('Floor is not independently walkable');
 paintGridCell(blank, 'collision', 2, 2, 1, 8);
 if (isWalkable(blank, 20, 20)) throw Error('Fine collision brush did not block floor');
+const masksBeforeWall = Object.fromEntries(TERRAIN_KINDS
+  .filter(kind => kind !== 'walls').map(kind => [kind, blank.masks[kind].slice()]));
+const noiseBeforeWall = blank.noise.slice();
+paintGridCell(blank, 'walls', 0, 0, 1);
+paintGridCell(blank, 'walls', 0, 1, 1);
+paintGridCell(blank, 'walls', 1, 1, 1);
+if (wallSouthAt(blank, 0, 0) || !wallSouthAt(blank, 0, 1) || !wallSouthAt(blank, 1, 1)) {
+  throw Error('Wall footprint did not expose only its southern boundary');
+}
+if (!isWalkable(blank, 48, 48)) throw Error('Wall footprint changed walkability without collision');
+for (const kind of Object.keys(masksBeforeWall)) {
+  if (masksBeforeWall[kind].some((byte, index) => byte !== blank.masks[kind][index])) {
+    throw Error(`Wall painting changed ${kind}`);
+  }
+}
+if (noiseBeforeWall.some((value, index) => value !== blank.noise[index])) throw Error('Wall painting changed noise');
+const topology = unpackLevel({ width: 192, height: 128, cell: 8, seed: 3, player: [16, 16], enemies: [], masks: {} });
+for (const [x, y] of [[0, 0], [0, 1], [1, 1], [3, 0], [4, 0], [4, 1], [5, 0]]) {
+  paintGridCell(topology, 'walls', x, y, 1);
+}
+const facades = [];
+for (let y = 0; y < 4; y++) for (let x = 0; x < 6; x++) {
+  if (wallSouthAt(topology, x, y)) facades.push(`${x},${y}`);
+}
+if (facades.join('|') !== '3,0|5,0|0,1|1,1|4,1') {
+  throw Error(`Wall steps, gaps, or thick footprint emitted wrong facades: ${facades}`);
+}
 const overlap = unpackLevel(packLevel(blank));
-if (!gridAt(overlap, 'ruins', 0, 0) || !gridAt(overlap, 'dirt', 1, 1)) throw Error('Grid overlap did not round-trip');
+if (!gridAt(overlap, 'ruins', 0, 0) || !gridAt(overlap, 'dirt', 1, 1)
+  || !gridAt(overlap, 'walls', 1, 1) || !wallSouthAt(overlap, 1, 1)) {
+  throw Error('Grid overlap or wall footprint did not round-trip');
+}
 const partial = unpackLevel(blankSource);
 for (let y = 0; y < 2; y++) for (let x = 0; x < 4; x++) paintGridCell(partial, 'grass', x, y, 1, 8);
 normaliseGrid(partial, ['grass']);

@@ -4,7 +4,7 @@
 export const MASK_CELL = 8;
 export const AUTHOR_TILE = 32;
 export const NOISE_LEVELS = 5;
-export const TERRAIN_KINDS = ['grass', 'dirt', 'water', 'stones', 'ruins', 'bushes', 'collision'];
+export const TERRAIN_KINDS = ['grass', 'dirt', 'water', 'stones', 'ruins', 'bushes', 'walls', 'collision'];
 const CACHE_SCALE = 1;
 
 /** Stable integer hash. Coordinates and salts always produce the same detail. */
@@ -195,6 +195,12 @@ export function paintNoiseCell(level, gridX, gridY, value) {
   level.noise[index] = value;
   level.variableNoise = true;
   return true;
+}
+
+/** True when this footprint cell emits a north-facing facade at its south edge. */
+export function wallSouthAt(level, gridX, gridY) {
+  return !!gridAt(level, 'walls', gridX, gridY)
+    && !gridAt(level, 'walls', gridX, gridY + 1);
 }
 
 /** Majority occupancy lets old freehand masks migrate predictably to tiles. */
@@ -439,7 +445,7 @@ function scatter(context, level, kind, recipe) {
 
 const stoneAt = (level, x, y) => materialAt(level, x, y) > 4;
 
-/** Turn ruin coverage into a connected floor grammar and sparse wall remains. */
+/** Turn ruin coverage into a connected recessed-floor grammar. */
 function drawRuins(context, level) {
   // Broken tile seams communicate one architectural platform rather than a
   // collection of independently scattered props.
@@ -460,6 +466,44 @@ function drawRuins(context, level) {
     if (stoneAt(level, x + 2, y + 3) && stoneAt(level, x + 2, y + last)) {
       context.fillRect(x + 1, y + 3, 1, tile - 7);
     }
+  }
+}
+
+/** Extrude exposed southern footprint edges into joined two-tile ruin facades. */
+function drawWalls(context, level) {
+  const tile = AUTHOR_TILE;
+  const width = level.noiseWidth;
+  const height = level.noiseHeight;
+  context.fillStyle = '#49635d';
+  for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) {
+    if (gridAt(level, 'walls', x, y)) context.fillRect(x * tile, y * tile, tile, tile);
+  }
+  for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) {
+    if (!wallSouthAt(level, x, y)) continue;
+    const leftJoined = wallSouthAt(level, x - 1, y);
+    const rightJoined = wallSouthAt(level, x + 1, y);
+    const worldX = x * tile;
+    const baseline = (y + 1) * tile;
+    const top = baseline - tile * 2;
+    context.fillStyle = random(x, y, level.seed + 347) > 0.72 ? '#89a18e' : '#81998a';
+    context.fillRect(worldX, top, tile, tile + 2);
+    context.fillStyle = '#667e76';
+    context.fillRect(worldX, top + tile + 2, tile, tile - 4);
+    context.fillStyle = '#eef0cf';
+    context.fillRect(worldX, top, tile, 4);
+    context.fillStyle = '#bbc6ad';
+    context.fillRect(worldX, top + 4, tile, 3);
+    context.fillStyle = '#526a67';
+    context.fillRect(worldX, top + tile + 1, tile, 1);
+    context.fillStyle = '#344e53';
+    context.fillRect(worldX, baseline - 3, tile, 3);
+    if (leftJoined) {
+      context.fillStyle = '#5b746f';
+      context.fillRect(worldX, top + 7, 1, tile * 2 - 10);
+    }
+    context.fillStyle = '#a9bca2';
+    if (!leftJoined) context.fillRect(worldX, top - 2, 5, tile * 2 - 1);
+    if (!rightJoined) context.fillRect(worldX + tile - 5, top - 2, 5, tile * 2 - 1);
   }
 }
 
@@ -517,6 +561,7 @@ export function buildTerrain(level, scale = CACHE_SCALE, canvas = document.creat
   context.putImageData(image, 0, 0);
   context.setTransform(1 / scale, 0, 0, 1 / scale, 0, 0);
   drawRuins(context, level);
+  drawWalls(context, level);
   drawBushes(context, level);
   scatter(context, level, 'stones', [1, 0.18, 3, 2, '#b9c2b7', '#87948e', '#56656a']);
   return { canvas, level, scale };

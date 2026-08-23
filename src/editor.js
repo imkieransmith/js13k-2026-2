@@ -28,7 +28,7 @@ const inspectorEmpty = document.querySelector('#editor-inspector-empty');
 const inspectorLayers = document.querySelector('#editor-inspector-layers');
 const layerColours = {
   grass: '#68d48b', dirt: '#b98962', water: '#62b8ed', stones: '#dbe0ca',
-  ruins: '#fff3a6', bushes: '#469a45', collision: '#ff315a', noise: '#f06cff',
+  ruins: '#fff3a6', bushes: '#469a45', walls: '#81998a', collision: '#ff315a', noise: '#f06cff',
 };
 const noiseColours = ['#718096', '#62b8ed', '#b8cc62', '#f5b642', '#ff5a87'];
 const noiseLabels = ['None', 'Low', 'Medium', 'High', 'Extreme'];
@@ -82,8 +82,8 @@ function updateControls() {
   updateInspector();
 }
 
-const inspectOrder = ['noise', 'collision', 'water', 'stones', 'bushes', 'ruins', 'dirt', 'grass'];
-const inspectLabels = { noise: 'Noise', collision: 'Collision', water: 'Water', stones: 'Stones', bushes: 'Bushes', ruins: 'Floor', dirt: 'Dirt', grass: 'Grass' };
+const inspectOrder = ['noise', 'collision', 'stones', 'bushes', 'walls', 'water', 'ruins', 'dirt', 'grass'];
+const inspectLabels = { noise: 'Noise', collision: 'Collision', stones: 'Stones', bushes: 'Bushes', walls: 'Wall', water: 'Water', ruins: 'Floor', dirt: 'Dirt', grass: 'Grass' };
 
 function layerCellCount(kind) {
   if (!inspectorCell) return 0;
@@ -113,6 +113,7 @@ function updateInspector() {
     if (count || kind === 'noise') {
       if (kind === 'noise') state = noiseLabels[count];
       else if (kind === 'collision') state = `${count}/16 blocking`;
+      else if (kind === 'walls') state = 'Visible facade';
       else if (kind === 'water') state = 'Visible cutout';
       else if (kind === 'stones' || kind === 'bushes') state = hasWater ? 'Hidden by water' : hasLand ? 'Visible' : 'Needs land';
       else if (kind === 'ruins') state = hasWater ? 'Hidden by water' : 'Visible';
@@ -490,8 +491,8 @@ window.addEventListener('keydown', event => {
     event.preventDefault();
     redo();
   }
-  if ('12345678'.includes(event.key)) {
-    selectedKind = Number(event.key) === 8 ? 'noise' : TERRAIN_KINDS[Number(event.key) - 1];
+  if ('123456789'.includes(event.key)) {
+    selectedKind = Number(event.key) === 9 ? 'noise' : TERRAIN_KINDS[Number(event.key) - 1];
   }
   const modeKey = { p: 'pencil', r: 'rectangle', f: 'fill', e: 'erase', i: 'inspect' }[event.key.toLowerCase()];
   if (modeKey) selectedMode = modeKey;
