@@ -1,22 +1,25 @@
 import levelSource from './levels/level1.json';
 import {
   AUTHOR_TILE,
-  TERRAIN_KINDS,
+  addStackEntry,
   buildTerrain,
+  collisionAt,
   drawTerrain,
-  gridAt,
-  maskAt,
-  noiseAt,
+  editStackCells,
+  materialName,
+  moveStackEntry,
   packLevel,
-  paintGridCell,
-  paintGridRect,
-  paintNoiseCell,
-  paintNoiseRect,
+  paintCollisionCell,
+  removeStackEntry,
+  removeStackIndex,
+  stackAt,
+  stackKeyAt,
   unpackLevel,
 } from './terrain.js';
 
 const canvas = document.querySelector('#editor-canvas');
 const context = canvas.getContext('2d');
+const panel = document.querySelector('.editor__panel');
 const sizeInput = document.querySelector('#editor-size');
 const sizeValue = document.querySelector('#editor-size-value');
 const gridToggle = document.querySelector('#editor-grid');
@@ -26,18 +29,22 @@ const status = document.querySelector('#editor-status');
 const inspectorCoordinates = document.querySelector('#editor-inspector-coordinates');
 const inspectorEmpty = document.querySelector('#editor-inspector-empty');
 const inspectorLayers = document.querySelector('#editor-inspector-layers');
-const layerColours = {
+const colours = {
   grass: '#68d48b', dirt: '#b98962', water: '#62b8ed', stones: '#dbe0ca',
-  ruins: '#fff3a6', bushes: '#469a45', walls: '#81998a', collision: '#ff315a', noise: '#f06cff',
+  floor: '#fff3a6', bushes: '#469a45', wall: '#81998a', collision: '#ff315a',
 };
-const noiseColours = ['#718096', '#62b8ed', '#b8cc62', '#f5b642', '#ff5a87'];
-const noiseLabels = ['None', 'Low', 'Medium', 'High', 'Extreme'];
+const labels = {
+  grass: 'Grass', dirt: 'Dirt', water: 'Water', stones: 'Stones',
+  floor: 'Floor', bushes: 'Bushes', wall: 'Wall', collision: 'Collision',
+};
+const editorKinds = ['grass', 'dirt', 'water', 'stones', 'floor', 'bushes', 'wall', 'collision'];
+const surfaceCodes = 'gdwf';
 
 let level = unpackLevel(levelSource);
 let terrain = buildTerrain(level);
 let selectedKind = 'grass';
 let selectedMode = 'pencil';
-let selectedNoise = 3;
+let targetBand = 'auto';
 let pointerWorld = null;
 let activePointer = null;
 let painting = false;
@@ -45,7 +52,10 @@ let panning = false;
 let rendering = false;
 let spaceHeld = false;
 let eraseStroke = false;
-let strokeBefore = '';
+let gestureKind = null;
+let gestureMode = null;
+let gestureTarget = 'auto';
+let gestureSize = AUTHOR_TILE;
 let startCell = null;
 let lastCell = null;
 let rectangleCell = null;
@@ -55,46 +65,29 @@ let buildVersion = 0;
 let lastFrameTime = performance.now();
 const pendingCells = new Map();
 const undoStack = [];
-const held = new Set();
 const redoStack = [];
+const held = new Set();
 const camera = { x: level.width / 2, y: level.height / 2, zoom: 0.55 };
 
 const snapshot = () => JSON.stringify(packLevel(level));
 const setStatus = message => { status.textContent = message; };
-const gridSize = () => selectedMode === 'inspect'
-  ? AUTHOR_TILE
-  : selectedKind === 'collision' ? level.cell : AUTHOR_TILE;
-const gridWidth = size => Math.ceil(level.width / size);
-const gridHeight = size => Math.ceil(level.height / size);
+const gridSize = (kind = selectedKind) => kind === 'collision' ? level.cell : AUTHOR_TILE;
+const gridWidth = size => size === level.cell ? level.collisionWidth : level.tileWidth;
+const gridHeight = size => size === level.cell ? level.collisionHeight : level.tileHeight;
+const stackBand = (stack, index) => index > stack.indexOf('#') && stack.includes('#') ? 'upper' : 'ground';
+const bandEntries = (stack, band) => {
+  const wall = stack.indexOf('#');
+  return band === 'upper' ? wall < 0 ? [] : stack.slice(wall + 1) : stack.slice(0, wall < 0 ? stack.length : wall);
+};
+const bandSupported = entries => entries.some(code => surfaceCodes.includes(code));
 
 function updateControls() {
-  document.querySelectorAll('[data-kind]').forEach(button => {
-    button.classList.toggle('is-active', button.dataset.kind === selectedKind);
-  });
-  document.querySelectorAll('[data-mode]').forEach(button => {
-    button.classList.toggle('is-active', button.dataset.mode === selectedMode);
-  });
-  document.querySelectorAll('[data-noise]').forEach(button => {
-    button.classList.toggle('is-active', Number(button.dataset.noise) === selectedNoise);
-  });
+  document.querySelectorAll('[data-kind]').forEach(button => button.classList.toggle('is-active', button.dataset.kind === selectedKind));
+  document.querySelectorAll('[data-mode]').forEach(button => button.classList.toggle('is-active', button.dataset.mode === selectedMode));
+  document.querySelectorAll('[data-target]').forEach(button => button.classList.toggle('is-active', button.dataset.target === targetBand));
   sizeValue.value = sizeInput.value;
   seedLabel.textContent = level.seed;
   updateInspector();
-}
-
-const inspectOrder = ['noise', 'collision', 'stones', 'bushes', 'walls', 'water', 'ruins', 'dirt', 'grass'];
-const inspectLabels = { noise: 'Noise', collision: 'Collision', stones: 'Stones', bushes: 'Bushes', walls: 'Wall', water: 'Water', ruins: 'Floor', dirt: 'Dirt', grass: 'Grass' };
-
-function layerCellCount(kind) {
-  if (!inspectorCell) return 0;
-  if (kind === 'noise') return noiseAt(level, inspectorCell.x, inspectorCell.y);
-  let count = 0;
-  const startX = inspectorCell.x * AUTHOR_TILE;
-  const startY = inspectorCell.y * AUTHOR_TILE;
-  for (let y = 4; y < AUTHOR_TILE; y += level.cell) for (let x = 4; x < AUTHOR_TILE; x += level.cell) {
-    count += maskAt(level, kind, startX + x, startY + y);
-  }
-  return count;
 }
 
 function updateInspector() {
@@ -102,42 +95,51 @@ function updateInspector() {
   inspectorEmpty.hidden = !!inspectorCell;
   inspectorCoordinates.textContent = inspectorCell ? `${inspectorCell.x}, ${inspectorCell.y}` : '—';
   if (!inspectorCell) return;
-  const counts = Object.fromEntries(inspectOrder.map(kind => [kind, layerCellCount(kind)]));
-  const hasWater = counts.water > 0;
-  const hasFloor = counts.ruins > 0;
-  const hasDirt = counts.dirt > 0;
-  const hasLand = hasFloor || hasDirt || counts.grass > 0;
-  for (const kind of inspectOrder) {
-    const count = counts[kind];
-    let state = kind === 'noise' ? noiseLabels[count] : 'Empty';
-    if (count || kind === 'noise') {
-      if (kind === 'noise') state = noiseLabels[count];
-      else if (kind === 'collision') state = `${count}/16 blocking`;
-      else if (kind === 'walls') state = 'Visible facade';
-      else if (kind === 'water') state = 'Visible cutout';
-      else if (kind === 'stones' || kind === 'bushes') state = hasWater ? 'Hidden by water' : hasLand ? 'Visible' : 'Needs land';
-      else if (kind === 'ruins') state = hasWater ? 'Hidden by water' : 'Visible';
-      else if (kind === 'dirt') state = hasWater ? 'Hidden by water' : hasFloor ? 'Hidden by floor' : 'Visible';
-      else state = hasWater ? 'Hidden by water' : hasFloor ? 'Hidden by floor' : hasDirt ? 'Hidden by dirt' : 'Visible';
-    }
+  const stack = stackAt(level, inspectorCell.x, inspectorCell.y);
+  if (!stack.length) {
+    const empty = document.createElement('div');
+    empty.className = 'editor__stack-empty';
+    empty.textContent = 'Empty stack — paint a surface to create support.';
+    inspectorLayers.append(empty);
+    return;
+  }
+  const wall = stack.indexOf('#');
+  const groundSupport = bandSupported(bandEntries(stack, 'ground'));
+  const upperSupport = bandSupported(bandEntries(stack, 'upper'));
+  for (let index = stack.length - 1; index >= 0; index--) {
+    const code = stack[index];
+    const kind = materialName(code);
+    const band = code === '#' ? 'wall' : stackBand(stack, index);
+    const unsupported = (code === 'b' || code === 's') && !(band === 'upper' ? upperSupport : groundSupport);
     const row = document.createElement('div');
-    row.className = `editor__inspector-layer${count || kind === 'noise' ? ' is-present' : ''}`;
+    row.className = `editor__stack-entry${code === '#' ? ' editor__stack-entry--wall' : ''}${unsupported ? ' is-unsupported' : ''}`;
+    if (kind === selectedKind && (targetBand === band || targetBand === 'auto')) row.classList.add('is-active');
     const select = document.createElement('button');
-    select.className = 'editor__inspector-select';
-    select.dataset.inspectAction = 'select';
-    select.dataset.inspectKind = kind;
-    select.textContent = inspectLabels[kind];
-    const description = document.createElement('span');
-    description.className = 'editor__inspector-state';
-    description.textContent = state;
-    const clear = document.createElement('button');
-    clear.className = 'editor__inspector-clear';
-    clear.dataset.inspectAction = 'clear';
-    clear.dataset.inspectKind = kind;
-    clear.textContent = '×';
-    clear.title = `Clear ${inspectLabels[kind]} from this tile`;
-    clear.disabled = kind === 'noise' ? count === 0 : !count;
-    row.append(select, description, clear);
+    select.className = 'editor__stack-select';
+    select.dataset.stackAction = 'select';
+    select.dataset.stackIndex = index;
+    select.textContent = `${labels[kind]} · ${band === 'upper' ? 'Elevated' : band === 'ground' ? 'Ground' : 'Structure'}${unsupported ? ' · needs surface' : ''}`;
+    const up = document.createElement('button');
+    up.className = 'editor__stack-action';
+    up.dataset.stackAction = 'up';
+    up.dataset.stackIndex = index;
+    up.textContent = '↑';
+    up.title = 'Move visually up';
+    up.disabled = index === stack.length - 1;
+    const down = document.createElement('button');
+    down.className = 'editor__stack-action';
+    down.dataset.stackAction = 'down';
+    down.dataset.stackIndex = index;
+    down.textContent = '↓';
+    down.title = 'Move visually down';
+    down.disabled = index === 0;
+    const remove = document.createElement('button');
+    remove.className = 'editor__stack-action editor__stack-action--remove';
+    remove.dataset.stackAction = 'remove';
+    remove.dataset.stackIndex = index;
+    remove.textContent = '×';
+    remove.title = code === '#' ? 'Remove Wall and demote elevated entries' : `Remove ${labels[kind]}`;
+    row.append(select, up, down, remove);
     inspectorLayers.append(row);
   }
 }
@@ -177,7 +179,6 @@ function queueBuild(message = 'Ready') {
   const version = ++buildVersion;
   rendering = true;
   setStatus('Rendering…');
-  // Two frames let the semantic overlay/status reach screen before the costly bake.
   requestAnimationFrame(() => requestAnimationFrame(() => {
     if (version !== buildVersion) return;
     terrain = buildTerrain(level, terrain.scale, terrain.canvas);
@@ -187,75 +188,6 @@ function queueBuild(message = 'Ready') {
   }));
 }
 
-function markPending(x, y, size, value, erasing = false) {
-  pendingCells.set(`${size}:${x}:${y}`, { x, y, size, value, kind: selectedKind, erasing });
-}
-
-function paintCell(x, y, value, size = gridSize()) {
-  const finalValue = selectedKind === 'noise' ? value ? selectedNoise : 0 : value;
-  const changed = selectedKind === 'noise'
-    ? paintNoiseCell(level, x, y, finalValue)
-    : paintGridCell(level, selectedKind, x, y, finalValue, size);
-  if (changed) markPending(x, y, size, finalValue, !value);
-  return changed;
-}
-
-function paintDab(cell, value) {
-  const brush = Number(sizeInput.value);
-  const offset = Math.floor((brush - 1) / 2);
-  let changed = false;
-  for (let y = 0; y < brush; y++) for (let x = 0; x < brush; x++) {
-    changed = paintCell(cell.x + x - offset, cell.y + y - offset, value) || changed;
-  }
-  return changed;
-}
-
-/** Integer cell traversal keeps fast pointer drags gap-free. */
-function paintLine(from, to, value) {
-  let x = from.x;
-  let y = from.y;
-  const dx = Math.abs(to.x - x);
-  const dy = -Math.abs(to.y - y);
-  const sx = x < to.x ? 1 : -1;
-  const sy = y < to.y ? 1 : -1;
-  let error = dx + dy;
-  while (true) {
-    paintDab({ x, y }, value);
-    if (x === to.x && y === to.y) break;
-    const twice = error * 2;
-    if (twice >= dy) { error += dy; x += sx; }
-    if (twice <= dx) { error += dx; y += sy; }
-  }
-}
-
-function flood(cell, value) {
-  const size = gridSize();
-  const width = gridWidth(size);
-  const height = gridHeight(size);
-  const target = selectedKind === 'noise'
-    ? noiseAt(level, cell.x, cell.y)
-    : gridAt(level, selectedKind, cell.x, cell.y, size);
-  const finalValue = selectedKind === 'noise' && value ? selectedNoise : value;
-  if (target === finalValue) return false;
-  const visited = new Uint8Array(width * height);
-  const stack = [cell.x, cell.y];
-  let changed = false;
-  while (stack.length) {
-    const y = stack.pop();
-    const x = stack.pop();
-    if (x < 0 || y < 0 || x >= width || y >= height) continue;
-    const index = y * width + x;
-    const current = selectedKind === 'noise'
-      ? noiseAt(level, x, y)
-      : gridAt(level, selectedKind, x, y, size);
-    if (visited[index] || current !== target) continue;
-    visited[index] = 1;
-    changed = paintCell(x, y, value, size) || changed;
-    stack.push(x - 1, y, x + 1, y, x, y - 1, x, y + 1);
-  }
-  return changed;
-}
-
 function pushUndo(before) {
   const after = snapshot();
   if (after === before) return false;
@@ -263,39 +195,6 @@ function pushUndo(before) {
   if (undoStack.length > 100) undoStack.shift();
   redoStack.length = 0;
   return true;
-}
-
-function finishGesture(commit = true) {
-  if (panning) {
-    panning = false;
-  } else if (painting) {
-    if (selectedMode === 'rectangle' && commit && startCell && rectangleCell) {
-      const size = gridSize();
-      const value = eraseStroke ? 0 : 1;
-      const finalValue = selectedKind === 'noise' && value ? selectedNoise : value;
-      const changed = selectedKind === 'noise'
-        ? paintNoiseRect(level, startCell.x, startCell.y, rectangleCell.x, rectangleCell.y, finalValue)
-        : paintGridRect(level, selectedKind, startCell.x, startCell.y,
-          rectangleCell.x, rectangleCell.y, finalValue, size);
-      if (changed) for (let y = Math.min(startCell.y, rectangleCell.y); y <= Math.max(startCell.y, rectangleCell.y); y++) {
-        for (let x = Math.min(startCell.x, rectangleCell.x); x <= Math.max(startCell.x, rectangleCell.x); x++) {
-          markPending(x, y, size, finalValue, !value);
-        }
-      }
-    }
-    if (!commit) {
-      level = unpackLevel(JSON.parse(strokeBefore));
-      pendingCells.clear();
-    } else if (pushUndo(strokeBefore)) {
-      updateInspector();
-      queueBuild('Ready');
-    } else pendingCells.clear();
-    painting = false;
-  }
-  const pointer = activePointer;
-  activePointer = null;
-  if (pointer !== null && canvas.hasPointerCapture?.(pointer)) canvas.releasePointerCapture(pointer);
-  startCell = lastCell = rectangleCell = lastPan = null;
 }
 
 function restore(json, message) {
@@ -321,6 +220,110 @@ function redo() {
   restore(after, 'Redid gesture');
 }
 
+function markCell(cell) {
+  const size = gestureSize;
+  if (cell.x < 0 || cell.y < 0 || cell.x >= gridWidth(size) || cell.y >= gridHeight(size)) return;
+  pendingCells.set(`${cell.x}:${cell.y}`, { ...cell, size, kind: gestureKind, erasing: eraseStroke });
+}
+
+function markDab(cell) {
+  const brush = Number(sizeInput.value);
+  const offset = Math.floor((brush - 1) / 2);
+  for (let y = 0; y < brush; y++) for (let x = 0; x < brush; x++) markCell({ x: cell.x + x - offset, y: cell.y + y - offset });
+}
+
+/** Integer traversal makes a fast pointer drag select every crossed tile. */
+function markLine(from, to) {
+  let x = from.x;
+  let y = from.y;
+  const dx = Math.abs(to.x - x);
+  const dy = -Math.abs(to.y - y);
+  const sx = x < to.x ? 1 : -1;
+  const sy = y < to.y ? 1 : -1;
+  let error = dx + dy;
+  while (true) {
+    markDab({ x, y });
+    if (x === to.x && y === to.y) break;
+    const twice = error * 2;
+    if (twice >= dy) { error += dy; x += sx; }
+    if (twice <= dx) { error += dx; y += sy; }
+  }
+}
+
+function rectangleCells() {
+  const cells = [];
+  if (!startCell || !rectangleCell) return cells;
+  for (let y = Math.min(startCell.y, rectangleCell.y); y <= Math.max(startCell.y, rectangleCell.y); y++) {
+    for (let x = Math.min(startCell.x, rectangleCell.x); x <= Math.max(startCell.x, rectangleCell.x); x++) cells.push({ x, y });
+  }
+  return cells;
+}
+
+function floodCells(start) {
+  const size = gridSize();
+  const width = gridWidth(size);
+  const height = gridHeight(size);
+  const target = selectedKind === 'collision'
+    ? collisionAt(level, start.x, start.y) : stackKeyAt(level, start.x, start.y);
+  const visited = new Uint8Array(width * height);
+  const queue = [start];
+  const cells = [];
+  while (queue.length) {
+    const { x, y } = queue.pop();
+    if (x < 0 || y < 0 || x >= width || y >= height) continue;
+    const index = y * width + x;
+    if (visited[index]) continue;
+    visited[index] = 1;
+    const value = selectedKind === 'collision' ? collisionAt(level, x, y) : stackKeyAt(level, x, y);
+    if (value !== target) continue;
+    cells.push({ x, y });
+    queue.push({ x: x - 1, y }, { x: x + 1, y }, { x, y: y - 1 }, { x, y: y + 1 });
+  }
+  return cells;
+}
+
+function applyCells(cells, erasing, kind = selectedKind, target = targetBand) {
+  if (!cells.length) return false;
+  if (kind === 'collision') {
+    let changed = false;
+    for (const cell of cells) changed = paintCollisionCell(level, cell.x, cell.y, erasing ? 0 : 1) || changed;
+    return changed;
+  }
+  return editStackCells(level, cells, stack => erasing
+    ? removeStackEntry(stack, kind, target)
+    : addStackEntry(stack, kind, target));
+}
+
+function commitCells(cells, erasing, message = 'Ready', kind = selectedKind, target = targetBand) {
+  const before = snapshot();
+  try {
+    const changed = applyCells(cells, erasing, kind, target);
+    if (changed && pushUndo(before)) {
+      updateInspector();
+      queueBuild(message);
+    } else pendingCells.clear();
+    return changed;
+  } catch (error) {
+    pendingCells.clear();
+    setStatus(error.message);
+    return false;
+  }
+}
+
+function finishGesture(commit = true) {
+  if (panning) panning = false;
+  else if (painting) {
+    if (commit) commitCells(gestureMode === 'rectangle' ? rectangleCells() : [...pendingCells.values()], eraseStroke, 'Ready', gestureKind, gestureTarget);
+    else pendingCells.clear();
+    painting = false;
+  }
+  const pointer = activePointer;
+  activePointer = null;
+  if (pointer !== null && canvas.hasPointerCapture?.(pointer)) canvas.releasePointerCapture(pointer);
+  gestureKind = gestureMode = null;
+  startCell = lastCell = rectangleCell = lastPan = null;
+}
+
 canvas.addEventListener('pointerdown', event => {
   if (rendering || activePointer !== null) return;
   pointerWorld = eventWorld(event);
@@ -332,7 +335,7 @@ canvas.addEventListener('pointerdown', event => {
     return;
   }
   if (event.button !== 0 && event.button !== 2) return;
-  const cell = cellAt(pointerWorld);
+  const cell = cellAt(pointerWorld, selectedMode === 'inspect' ? AUTHOR_TILE : gridSize());
   if (!cell) return;
   event.preventDefault();
   if (selectedMode === 'inspect') {
@@ -342,18 +345,21 @@ canvas.addEventListener('pointerdown', event => {
     }
     return;
   }
+  eraseStroke = event.button === 2 || selectedMode === 'erase';
+  if (selectedMode === 'fill') {
+    commitCells(floodCells(cell), eraseStroke, 'Filled region');
+    return;
+  }
   activePointer = event.pointerId;
   canvas.setPointerCapture(event.pointerId);
   painting = true;
-  eraseStroke = event.button === 2 || selectedMode === 'erase';
-  strokeBefore = snapshot();
+  gestureKind = selectedKind;
+  gestureMode = selectedMode;
+  gestureTarget = targetBand;
+  gestureSize = gridSize(gestureKind);
+  pendingCells.clear();
   startCell = lastCell = rectangleCell = cell;
-  if (selectedMode === 'fill') {
-    flood(cell, eraseStroke ? 0 : 1);
-    finishGesture(true);
-  } else if (selectedMode !== 'rectangle') {
-    paintDab(cell, eraseStroke ? 0 : 1);
-  }
+  if (gestureMode !== 'rectangle') markDab(cell);
 });
 
 canvas.addEventListener('pointermove', event => {
@@ -365,11 +371,11 @@ canvas.addEventListener('pointermove', event => {
     return;
   }
   if (!painting) return;
-  const cell = cellAt(pointerWorld);
+  const cell = cellAt(pointerWorld, gestureSize);
   if (!cell) return;
-  if (selectedMode === 'rectangle') rectangleCell = cell;
-  else if (selectedMode !== 'fill' && (cell.x !== lastCell.x || cell.y !== lastCell.y)) {
-    paintLine(lastCell, cell, eraseStroke ? 0 : 1);
+  if (gestureMode === 'rectangle') rectangleCell = cell;
+  else if (cell.x !== lastCell.x || cell.y !== lastCell.y) {
+    markLine(lastCell, cell);
     lastCell = cell;
   }
 });
@@ -378,7 +384,6 @@ canvas.addEventListener('pointerup', event => { if (activePointer === event.poin
 canvas.addEventListener('pointercancel', event => { if (activePointer === event.pointerId) finishGesture(true); });
 canvas.addEventListener('lostpointercapture', event => { if (activePointer === event.pointerId) finishGesture(true); });
 canvas.addEventListener('contextmenu', event => event.preventDefault());
-
 canvas.addEventListener('wheel', event => {
   event.preventDefault();
   const before = eventWorld(event);
@@ -391,41 +396,35 @@ canvas.addEventListener('wheel', event => {
 
 sizeInput.addEventListener('input', updateControls);
 
-document.querySelector('.editor__panel').addEventListener('click', async event => {
+function changeInspectedStack(operation, message) {
+  if (!inspectorCell) return;
+  const before = snapshot();
+  try {
+    if (!editStackCells(level, [inspectorCell], operation)) return;
+    pushUndo(before);
+    updateInspector();
+    queueBuild(message);
+  } catch (error) { setStatus(error.message); }
+}
+
+panel.addEventListener('click', async event => {
   const button = event.target.closest('button');
   if (!button || rendering) return;
-  const inspectAction = button.dataset.inspectAction;
-  if (inspectAction === 'select') {
-    selectedKind = button.dataset.inspectKind;
-    selectedMode = 'pencil';
-    updateControls();
-    return;
-  }
-  if (inspectAction === 'clear' && inspectorCell) {
-    const before = snapshot();
-    const kind = button.dataset.inspectKind;
-    const changed = kind === 'noise'
-      ? paintNoiseCell(level, inspectorCell.x, inspectorCell.y, 0)
-      : paintGridCell(level, kind, inspectorCell.x, inspectorCell.y, 0, AUTHOR_TILE);
-    if (changed) {
-      pushUndo(before);
-      updateInspector();
-      queueBuild(`Cleared ${inspectLabels[kind]}`);
-    }
-    return;
-  }
   if (button.dataset.kind) selectedKind = button.dataset.kind;
   if (button.dataset.mode) selectedMode = button.dataset.mode;
-  if (button.dataset.noise !== undefined) {
-    selectedNoise = Number(button.dataset.noise);
-    selectedKind = 'noise';
-    if (selectedMode === 'inspect' && inspectorCell) {
-      const before = snapshot();
-      if (paintNoiseCell(level, inspectorCell.x, inspectorCell.y, selectedNoise)) {
-        pushUndo(before);
-        updateInspector();
-        queueBuild(`Set noise to ${noiseLabels[selectedNoise]}`);
-      }
+  if (button.dataset.target) targetBand = button.dataset.target;
+  const stackAction = button.dataset.stackAction;
+  if (stackAction && inspectorCell) {
+    const index = Number(button.dataset.stackIndex);
+    const inspected = stackAt(level, inspectorCell.x, inspectorCell.y);
+    if (stackAction === 'select') {
+      selectedKind = materialName(inspected[index]);
+      targetBand = inspected[index] === '#' ? 'auto' : stackBand(inspected, index);
+      selectedMode = 'pencil';
+    } else if (stackAction === 'remove') {
+      changeInspectedStack(stack => removeStackIndex(stack, index), 'Removed stack entry');
+    } else {
+      changeInspectedStack(stack => moveStackEntry(stack, index, stackAction === 'up' ? 1 : -1), 'Reordered stack');
     }
   }
   const action = button.dataset.action;
@@ -434,8 +433,7 @@ document.querySelector('.editor__panel').addEventListener('click', async event =
   if (action === 'regen') {
     const before = snapshot();
     level.seed++;
-    undoStack.push(before);
-    redoStack.length = 0;
+    pushUndo(before);
     queueBuild(`Regenerated seed ${level.seed}`);
   }
   if (action === 'load') {
@@ -443,6 +441,7 @@ document.querySelector('.editor__panel').addEventListener('click', async event =
     setStatus('Loading…');
     try {
       const response = await fetch(`/src/levels/level1.json?t=${Date.now()}`);
+      if (!response.ok) throw Error();
       restore(JSON.stringify(await response.json()), 'Reloaded level1.json');
       undoStack.length = redoStack.length = 0;
     } catch {
@@ -491,15 +490,12 @@ window.addEventListener('keydown', event => {
     event.preventDefault();
     redo();
   }
-  if ('123456789'.includes(event.key)) {
-    selectedKind = Number(event.key) === 9 ? 'noise' : TERRAIN_KINDS[Number(event.key) - 1];
-  }
+  if ('12345678'.includes(event.key)) selectedKind = editorKinds[Number(event.key) - 1];
   const modeKey = { p: 'pencil', r: 'rectangle', f: 'fill', e: 'erase', i: 'inspect' }[event.key.toLowerCase()];
   if (modeKey) selectedMode = modeKey;
-  if (event.key === '[' || event.key === ']') {
-    sizeInput.value = String(Math.max(1, Math.min(5,
-      Number(sizeInput.value) + (event.key === '[' ? -1 : 1))));
-  }
+  if (event.key === 'Escape') targetBand = 'auto';
+  if (event.key === '[' || event.key === ']') sizeInput.value = String(Math.max(1, Math.min(5,
+    Number(sizeInput.value) + (event.key === '[' ? -1 : 1))));
   updateControls();
 });
 window.addEventListener('keyup', event => {
@@ -515,51 +511,44 @@ window.addEventListener('resize', resize);
 
 function drawCollision(bounds) {
   if (!collisionToggle.checked) return;
-  const cell = level.cell;
-  const x0 = Math.max(0, Math.floor(bounds.left / cell));
-  const y0 = Math.max(0, Math.floor(bounds.top / cell));
-  const x1 = Math.min(level.gridWidth, Math.ceil(bounds.right / cell));
-  const y1 = Math.min(level.gridHeight, Math.ceil(bounds.bottom / cell));
+  const size = level.cell;
+  const x0 = Math.max(0, Math.floor(bounds.left / size));
+  const y0 = Math.max(0, Math.floor(bounds.top / size));
+  const x1 = Math.min(level.collisionWidth, Math.ceil(bounds.right / size));
+  const y1 = Math.min(level.collisionHeight, Math.ceil(bounds.bottom / size));
   context.globalAlpha = 0.38;
-  context.fillStyle = '#ff315a';
-  for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) {
-    if (maskAt(level, 'collision', (x + 0.5) * cell, (y + 0.5) * cell)) {
-      context.fillRect(x * cell, y * cell, cell, cell);
-    }
+  context.fillStyle = colours.collision;
+  for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) if (collisionAt(level, x, y)) {
+    context.fillRect(x * size, y * size, size, size);
   }
   context.globalAlpha = 1;
 }
 
-function drawSelectedLayer(bounds) {
+function selectedInStack(stack) {
+  if (selectedKind === 'wall') return stack.includes('#');
+  const code = { grass: 'g', dirt: 'd', water: 'w', floor: 'f', bushes: 'b', stones: 's' }[selectedKind];
+  const band = targetBand === 'auto' ? (stack.includes('#') ? 'upper' : 'ground') : targetBand;
+  return bandEntries(stack, band).includes(code);
+}
+
+function drawSelectedMaterial(bounds) {
   if (selectedKind === 'collision') return;
-  const size = AUTHOR_TILE;
-  const x0 = Math.max(0, Math.floor(bounds.left / size));
-  const y0 = Math.max(0, Math.floor(bounds.top / size));
-  const x1 = Math.min(gridWidth(size), Math.ceil(bounds.right / size));
-  const y1 = Math.min(gridHeight(size), Math.ceil(bounds.bottom / size));
-  if (selectedKind === 'noise') {
-    for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) {
-      const value = noiseAt(level, x, y);
-      context.globalAlpha = [0.16, 0.04, 0.12, 0.17, 0.22][value];
-      context.fillStyle = noiseColours[value];
-      context.fillRect(x * size, y * size, size, size);
-    }
-  } else {
-    context.globalAlpha = 0.07;
-    context.fillStyle = layerColours[selectedKind];
-    for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) {
-      if (gridAt(level, selectedKind, x, y, size)) context.fillRect(x * size, y * size, size, size);
-    }
+  const x0 = Math.max(0, Math.floor(bounds.left / AUTHOR_TILE));
+  const y0 = Math.max(0, Math.floor(bounds.top / AUTHOR_TILE));
+  const x1 = Math.min(level.tileWidth, Math.ceil(bounds.right / AUTHOR_TILE));
+  const y1 = Math.min(level.tileHeight, Math.ceil(bounds.bottom / AUTHOR_TILE));
+  context.globalAlpha = 0.09;
+  context.fillStyle = colours[selectedKind];
+  for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) if (selectedInStack(stackAt(level, x, y))) {
+    context.fillRect(x * AUTHOR_TILE, y * AUTHOR_TILE, AUTHOR_TILE, AUTHOR_TILE);
   }
   context.globalAlpha = 1;
 }
 
 function drawPending() {
   for (const cell of pendingCells.values()) {
-    context.globalAlpha = cell.kind === 'noise' ? 0.4 : cell.value ? 0.34 : 0.5;
-    context.fillStyle = cell.kind === 'noise'
-      ? noiseColours[cell.value]
-      : cell.erasing ? '#ff315a' : layerColours[cell.kind];
+    context.globalAlpha = cell.erasing ? 0.48 : 0.32;
+    context.fillStyle = cell.erasing ? '#ff315a' : colours[cell.kind];
     context.fillRect(cell.x * cell.size, cell.y * cell.size, cell.size, cell.size);
   }
   context.globalAlpha = 1;
@@ -567,7 +556,7 @@ function drawPending() {
 
 function drawGrid(bounds, dpr) {
   if (!gridToggle.checked) return;
-  const size = gridSize();
+  const size = painting ? gestureSize : gridSize();
   const fine = size === level.cell;
   if (fine && camera.zoom < 0.45) return;
   const x0 = Math.max(0, Math.floor(bounds.left / size) * size);
@@ -593,36 +582,34 @@ function drawInspectedTile() {
 
 function drawCursor() {
   if (!pointerWorld || panning || rendering) return;
-  const size = gridSize();
+  const mode = painting ? gestureMode : selectedMode;
+  const kind = painting ? gestureKind : selectedKind;
+  const size = mode === 'inspect' ? AUTHOR_TILE : painting ? gestureSize : gridSize();
   const cell = cellAt(pointerWorld, size);
   if (!cell) return;
   let x0 = cell.x;
   let y0 = cell.y;
   let x1 = cell.x;
   let y1 = cell.y;
-  if (painting && selectedMode === 'rectangle' && startCell && rectangleCell) {
+  if (painting && mode === 'rectangle' && startCell && rectangleCell) {
     x0 = Math.min(startCell.x, rectangleCell.x);
     y0 = Math.min(startCell.y, rectangleCell.y);
     x1 = Math.max(startCell.x, rectangleCell.x);
     y1 = Math.max(startCell.y, rectangleCell.y);
   } else {
-    const brush = selectedMode === 'fill' || selectedMode === 'inspect' ? 1 : Number(sizeInput.value);
+    const brush = mode === 'fill' || mode === 'inspect' ? 1 : Number(sizeInput.value);
     const offset = Math.floor((brush - 1) / 2);
     x0 -= offset;
     y0 -= offset;
     x1 = x0 + brush - 1;
     y1 = y0 + brush - 1;
   }
+  const erasing = mode === 'erase' || painting && eraseStroke;
   context.globalAlpha = 0.18;
-  context.fillStyle = selectedMode === 'inspect'
-    ? '#62b8ed'
-    : selectedMode === 'erase' || painting && eraseStroke ? '#ff315a'
-      : selectedKind === 'noise' ? noiseColours[selectedNoise] : layerColours[selectedKind];
+  context.fillStyle = mode === 'inspect' ? '#62b8ed' : erasing ? '#ff315a' : colours[kind];
   context.fillRect(x0 * size, y0 * size, (x1 - x0 + 1) * size, (y1 - y0 + 1) * size);
   context.globalAlpha = 0.9;
-  context.strokeStyle = selectedMode === 'inspect'
-    ? '#62b8ed'
-    : selectedMode === 'erase' || painting && eraseStroke ? '#ff315a' : '#fff3a6';
+  context.strokeStyle = mode === 'inspect' ? '#62b8ed' : erasing ? '#ff315a' : '#fff3a6';
   context.lineWidth = 2 / camera.zoom;
   context.strokeRect(x0 * size, y0 * size, (x1 - x0 + 1) * size, (y1 - y0 + 1) * size);
   context.globalAlpha = 1;
@@ -631,10 +618,8 @@ function drawCursor() {
 function frame(time) {
   const dt = Math.min((time - lastFrameTime) / 1000, 0.05);
   lastFrameTime = time;
-  const panX = (held.has('KeyD') || held.has('ArrowRight') ? 1 : 0)
-    - (held.has('KeyA') || held.has('ArrowLeft') ? 1 : 0);
-  const panY = (held.has('KeyS') || held.has('ArrowDown') ? 1 : 0)
-    - (held.has('KeyW') || held.has('ArrowUp') ? 1 : 0);
+  const panX = (held.has('KeyD') || held.has('ArrowRight') ? 1 : 0) - (held.has('KeyA') || held.has('ArrowLeft') ? 1 : 0);
+  const panY = (held.has('KeyS') || held.has('ArrowDown') ? 1 : 0) - (held.has('KeyW') || held.has('ArrowUp') ? 1 : 0);
   if (panX || panY) {
     const length = Math.hypot(panX, panY);
     const distance = 560 * dt / camera.zoom;
@@ -653,7 +638,7 @@ function frame(time) {
   );
   const bounds = viewBounds();
   drawTerrain(context, terrain, bounds);
-  drawSelectedLayer(bounds);
+  drawSelectedMaterial(bounds);
   drawCollision(bounds);
   drawPending();
   drawGrid(bounds, dpr);

@@ -11,17 +11,16 @@
   <canvas id="editor-canvas" class="editor__canvas"></canvas>
   <aside class="editor__panel" aria-label="Terrain tools">
     <h1 class="editor__title">TERRAIN</h1>
-    <h2 class="editor__heading">LAYER</h2>
+    <h2 class="editor__heading">MATERIAL</h2>
     <div class="editor__tools" role="group" aria-label="Terrain layer">
       <button class="editor__tool is-active" data-kind="grass">Grass <kbd>1</kbd></button>
       <button class="editor__tool" data-kind="dirt">Dirt <kbd>2</kbd></button>
       <button class="editor__tool" data-kind="water">Water <kbd>3</kbd></button>
       <button class="editor__tool" data-kind="stones">Stones <kbd>4</kbd></button>
-      <button class="editor__tool" data-kind="ruins">Floor <kbd>5</kbd></button>
+      <button class="editor__tool" data-kind="floor">Floor <kbd>5</kbd></button>
       <button class="editor__tool" data-kind="bushes">Bushes <kbd>6</kbd></button>
-      <button class="editor__tool" data-kind="walls">Wall <kbd>7</kbd></button>
+      <button class="editor__tool" data-kind="wall">Wall <kbd>7</kbd></button>
       <button class="editor__tool editor__tool--collision" data-kind="collision">Collision <kbd>8</kbd></button>
-      <button class="editor__tool editor__tool--noise" data-kind="noise">Noise <kbd>9</kbd></button>
     </div>
     <h2 class="editor__heading">TOOL</h2>
     <div class="editor__tools" role="group" aria-label="Drawing tool">
@@ -35,19 +34,16 @@
       <input id="editor-size" type="range" min="1" max="5" step="1" value="1">
       <output id="editor-size-value">1</output>
     </label>
-    <h2 class="editor__heading">NOISE STRENGTH</h2>
-    <div class="editor__noise-levels" role="group" aria-label="Noise strength">
-      <button data-noise="0">None</button>
-      <button data-noise="1">Low</button>
-      <button data-noise="2">Medium</button>
-      <button data-noise="3">High</button>
-      <button data-noise="4">Extreme</button>
-    </div>
     <label class="editor__check"><input id="editor-grid" type="checkbox" checked> Show grid</label>
     <label class="editor__check"><input id="editor-collision" type="checkbox" checked> Show collision</label>
     <section class="editor__inspector" aria-label="Inspected tile layers">
       <h2 class="editor__heading">TILE <span id="editor-inspector-coordinates">—</span></h2>
       <p id="editor-inspector-empty" class="editor__inspector-empty">Choose Inspect, then click a tile.</p>
+      <div class="editor__targets" role="group" aria-label="Stack target band">
+        <button class="is-active" data-target="auto">Auto</button>
+        <button data-target="ground">Ground</button>
+        <button data-target="upper">Elevated</button>
+      </div>
       <div id="editor-inspector-layers" class="editor__inspector-layers"></div>
     </section>
     <div class="editor__row">
@@ -63,7 +59,7 @@
       <button class="editor__button" data-action="save">Save</button>
       <button class="editor__button" data-action="download">Download</button>
     </div>
-    <p class="editor__help">Drag to draw · I inspect · RMB erase · WASD/arrows or middle/Space drag pan · wheel zoom · [ ] brush size</p>
+    <p class="editor__help">Paint adds to the top of the active stack · inspector arrows reorder · Esc resets Auto · RMB erase · WASD/arrows or middle/Space drag pan</p>
     <p id="editor-status" class="editor__status" role="status">Ready</p>
   </aside>
 </main>
