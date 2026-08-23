@@ -20,6 +20,7 @@
       <button class="editor__tool" data-kind="ruins">Floor <kbd>5</kbd></button>
       <button class="editor__tool" data-kind="bushes">Bushes <kbd>6</kbd></button>
       <button class="editor__tool editor__tool--collision" data-kind="collision">Collision <kbd>7</kbd></button>
+      <button class="editor__tool editor__tool--noise" data-kind="noise">Noise <kbd>8</kbd></button>
     </div>
     <h2 class="editor__heading">TOOL</h2>
     <div class="editor__tools" role="group" aria-label="Drawing tool">
@@ -33,6 +34,14 @@
       <input id="editor-size" type="range" min="1" max="5" step="1" value="1">
       <output id="editor-size-value">1</output>
     </label>
+    <h2 class="editor__heading">NOISE STRENGTH</h2>
+    <div class="editor__noise-levels" role="group" aria-label="Noise strength">
+      <button data-noise="0">None</button>
+      <button data-noise="1">Low</button>
+      <button data-noise="2">Medium</button>
+      <button data-noise="3">High</button>
+      <button data-noise="4">Extreme</button>
+    </div>
     <label class="editor__check"><input id="editor-grid" type="checkbox" checked> Show grid</label>
     <label class="editor__check"><input id="editor-collision" type="checkbox" checked> Show collision</label>
     <section class="editor__inspector" aria-label="Inspected tile layers">

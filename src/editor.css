@@ -11,10 +11,14 @@ button,input{font:inherit}
 .editor__tool:hover,.editor__button:hover{border-color:#8eb9d3}
 .editor__tool.is-active{border-color:#fff3a6;background:#527f50;color:#fff}
 .editor__tool--erase.is-active,.editor__tool--collision.is-active{background:#a63f56}
+.editor__tool--noise.is-active{background:#79518d}
 .editor__tool kbd{float:right;color:#9bb0c5;font-size:9px}
 .editor__field{display:grid;grid-template-columns:1fr 1fr 28px;align-items:center;gap:7px;margin-top:13px;color:#b8c7d5}
 .editor__field input{width:100%}
 .editor__field output{text-align:right;color:#fff3a6}
+.editor__noise-levels{display:grid;grid-template-columns:repeat(5,1fr);gap:3px}
+.editor__noise-levels button{min-height:25px;padding:2px;border:1px solid #536582;background:#293955;color:#b8c7d5;font-size:9px;cursor:pointer}
+.editor__noise-levels button.is-active{border-color:#f5b642;background:#79518d;color:#fff}
 .editor__check{display:block;margin:11px 0;color:#b8c7d5}
 .editor__inspector{margin:12px 0;padding-top:1px;border-top:1px solid #344665}
 .editor__inspector .editor__heading{display:flex;justify-content:space-between}

@@ -3,6 +3,7 @@
 // the variation. Cosmetic noise never participates in collision.
 export const MASK_CELL = 8;
 export const AUTHOR_TILE = 32;
+export const NOISE_LEVELS = 5;
 export const TERRAIN_KINDS = ['grass', 'dirt', 'water', 'stones', 'ruins', 'bushes', 'collision'];
 const CACHE_SCALE = 1;
 
@@ -77,6 +78,19 @@ export function unpackLevel(source) {
   const bytes = Math.ceil(gridWidth * gridHeight / 8);
   const masks = {};
   for (const kind of TERRAIN_KINDS) masks[kind] = decodeMask(source.masks?.[kind], bytes);
+  const noiseWidth = Math.ceil(source.width / AUTHOR_TILE);
+  const noiseHeight = Math.ceil(source.height / AUTHOR_TILE);
+  const noiseBits = noiseWidth * noiseHeight;
+  const noiseBytes = Math.ceil(noiseBits / 8);
+  const noise = new Uint8Array(noiseBits);
+  if (source.noise) {
+    const planes = [0, 1, 2].map(index => decodeMask(source.noise[index], noiseBytes));
+    for (let i = 0; i < noiseBits; i++) {
+      noise[i] = bitAt(planes[0], i) | bitAt(planes[1], i) << 1 | bitAt(planes[2], i) << 2;
+      // Migrate the previous four-level High/Extreme values around new Medium.
+      if (source.noise.length < 3 && noise[i] > 1) noise[i]++;
+    }
+  } else noise.fill(1);
   return {
     width: source.width,
     height: source.height,
@@ -86,6 +100,10 @@ export function unpackLevel(source) {
     enemies: source.enemies,
     gridWidth,
     gridHeight,
+    noiseWidth,
+    noiseHeight,
+    noise,
+    variableNoise: noise.some(value => value !== 1),
     masks,
   };
 }
@@ -95,6 +113,11 @@ export function packLevel(level) {
   const masks = {};
   const bits = level.gridWidth * level.gridHeight;
   for (const kind of TERRAIN_KINDS) masks[kind] = encodeMask(level.masks[kind], bits);
+  const noiseBits = level.noiseWidth * level.noiseHeight;
+  const planes = Array.from({ length: 3 }, () => new Uint8Array(Math.ceil(noiseBits / 8)));
+  for (let i = 0; i < noiseBits; i++) for (let bit = 0; bit < 3; bit++) {
+    setBit(planes[bit], i, level.noise[i] >> bit & 1);
+  }
   return {
     width: level.width,
     height: level.height,
@@ -102,6 +125,7 @@ export function packLevel(level) {
     seed: level.seed,
     player: level.player,
     enemies: level.enemies,
+    noise: planes.map(plane => encodeMask(plane, noiseBits)),
     masks,
   };
 }
@@ -156,6 +180,23 @@ function gridBlock(level, gridX, gridY, size) {
   return { x: gridX * span, y: gridY * span, span };
 }
 
+/** Query the four-level cosmetic boundary strength of one authoring tile. */
+export function noiseAt(level, gridX, gridY) {
+  if (gridX < 0 || gridY < 0 || gridX >= level.noiseWidth || gridY >= level.noiseHeight) return 0;
+  return level.noise[gridY * level.noiseWidth + gridX];
+}
+
+/** Paint cosmetic noise without touching any material or collision mask. */
+export function paintNoiseCell(level, gridX, gridY, value) {
+  if (gridX < 0 || gridY < 0 || gridX >= level.noiseWidth || gridY >= level.noiseHeight) return false;
+  const index = gridY * level.noiseWidth + gridX;
+  value = Math.max(0, Math.min(NOISE_LEVELS - 1, value | 0));
+  if (level.noise[index] === value) return false;
+  level.noise[index] = value;
+  level.variableNoise = true;
+  return true;
+}
+
 /** Majority occupancy lets old freehand masks migrate predictably to tiles. */
 export function gridAt(level, kind, gridX, gridY, size = AUTHOR_TILE) {
   const block = gridBlock(level, gridX, gridY, size);
@@ -192,6 +233,16 @@ export function paintGridRect(level, kind, x0, y0, x1, y1, value = 1, size = AUT
   for (let y = Math.min(y0, y1); y <= Math.max(y0, y1); y++) {
     for (let x = Math.min(x0, x1); x <= Math.max(x0, x1); x++) {
       changed = paintGridCell(level, kind, x, y, value, size) || changed;
+    }
+  }
+  return changed;
+}
+
+export function paintNoiseRect(level, x0, y0, x1, y1, value) {
+  let changed = false;
+  for (let y = Math.min(y0, y1); y <= Math.max(y0, y1); y++) {
+    for (let x = Math.min(x0, x1); x <= Math.max(x0, x1); x++) {
+      changed = paintNoiseCell(level, x, y, value) || changed;
     }
   }
   return changed;
@@ -278,33 +329,74 @@ const PALETTE = [
   [128, 91, 60], [207, 211, 188],
 ];
 
-function organicCoverage(level, mask, worldX, worldY, salt) {
-  const value = coverage(level, mask, worldX, worldY);
-  // Complete tile interiors remain exact; only the interpolated boundary band
-  // receives stable pixel-scale erosion and encroachment.
+const NOISE_REACH = [0, 4, 7, 12, 20];
+
+function effectiveNoise(level, worldX, worldY) {
+  if (!level.variableNoise) return 1;
+  const x = Math.floor(worldX / AUTHOR_TILE);
+  const y = Math.floor(worldY / AUTHOR_TILE);
+  const localX = worldX - x * AUTHOR_TILE;
+  const localY = worldY - y * AUTHOR_TILE;
+  let strength = noiseAt(level, x, y);
+  let neighbour = noiseAt(level, x - 1, y);
+  if (localX < NOISE_REACH[neighbour]) strength = Math.max(strength, neighbour);
+  neighbour = noiseAt(level, x + 1, y);
+  if (AUTHOR_TILE - localX < NOISE_REACH[neighbour]) strength = Math.max(strength, neighbour);
+  neighbour = noiseAt(level, x, y - 1);
+  if (localY < NOISE_REACH[neighbour]) strength = Math.max(strength, neighbour);
+  neighbour = noiseAt(level, x, y + 1);
+  if (AUTHOR_TILE - localY < NOISE_REACH[neighbour]) strength = Math.max(strength, neighbour);
+  return strength;
+}
+
+const samplePoint = { x: 0, y: 0, strength: 1 };
+
+/** One displaced coordinate pair is shared by every material so edges still meet. */
+function terrainSample(level, worldX, worldY) {
+  const strength = effectiveNoise(level, worldX, worldY);
+  const amount = [0, 0, 7, 14, 24][strength];
+  samplePoint.x = worldX;
+  samplePoint.y = worldY;
+  samplePoint.strength = strength;
+  if (amount) {
+    samplePoint.x += Math.round((fieldNoise(worldX / 11, worldY / 11, level.seed + 331) - 0.5) * amount * 2);
+    samplePoint.y += Math.round((fieldNoise(worldX / 11, worldY / 11, level.seed + 337) - 0.5) * amount * 2);
+  }
+  return samplePoint;
+}
+
+function organicCoverage(level, mask, sample, salt) {
+  const value = coverage(level, mask, sample.x, sample.y);
+  if (!sample.strength) return value;
+  // Low retains the accepted narrow edge. High levels first displace the shared
+  // sample above, then make the remaining transition progressively rougher.
+  const erosion = [0, 0.42, 0.46, 0.5, 0.55][sample.strength];
   return value > 0.02 && value < 0.98
-    ? value + (fieldNoise(worldX / 5, worldY / 5, level.seed + salt) - 0.5) * 0.42
+    ? value + (fieldNoise(sample.x / 5, sample.y / 5, level.seed + salt) - 0.5) * erosion
     : value;
 }
 
-function surfaceField(level, worldX, worldY) {
+function surfaceFromSample(level, sample) {
   const land = Math.max(
-    organicCoverage(level, level.masks.grass, worldX, worldY, 7),
-    organicCoverage(level, level.masks.dirt, worldX, worldY, 11),
-    organicCoverage(level, level.masks.ruins, worldX, worldY, 13),
+    organicCoverage(level, level.masks.grass, sample, 7),
+    organicCoverage(level, level.masks.dirt, sample, 11),
+    organicCoverage(level, level.masks.ruins, sample, 13),
   );
-  const pool = organicCoverage(level, level.masks.water, worldX, worldY, 17);
+  const pool = organicCoverage(level, level.masks.water, sample, 17);
   return Math.min(land, 1 - pool);
+}
+
+function surfaceField(level, worldX, worldY) {
+  return surfaceFromSample(level, terrainSample(level, worldX, worldY));
 }
 
 /** Material index at a world point after cosmetic coverage/noise. */
 function materialAt(level, worldX, worldY) {
-  const surface = surfaceField(level, worldX, worldY);
+  const sample = terrainSample(level, worldX, worldY);
+  const surface = surfaceFromSample(level, sample);
   if (surface > 0.56) {
-    // Ruin paint describes a connected floor mass. Higher-frequency field
-    // variation chips its edge without breaking the authored coverage apart.
-    if (organicCoverage(level, level.masks.ruins, worldX, worldY, 43) > 0.5) return 5;
-    if (organicCoverage(level, level.masks.dirt, worldX, worldY, 29) > 0.5) return 4;
+    if (organicCoverage(level, level.masks.ruins, sample, 43) > 0.5) return 5;
+    if (organicCoverage(level, level.masks.dirt, sample, 29) > 0.5) return 4;
     return 3;
   }
   if (surface > 0.34) return 1;
@@ -404,6 +496,7 @@ function drawBushes(context, level) {
 
 /** Bake static terrain once at one canvas pixel per world pixel. */
 export function buildTerrain(level, scale = CACHE_SCALE, canvas = document.createElement('canvas')) {
+  level.variableNoise = level.noise.some(value => value !== 1);
   canvas.width = Math.ceil(level.width / scale);
   canvas.height = Math.ceil(level.height / scale);
   const context = canvas.getContext('2d');
@@ -454,5 +547,6 @@ export function terrainSignature(level) {
   for (const kind of TERRAIN_KINDS) {
     for (const byte of level.masks[kind]) signature = Math.imul(signature ^ byte, 16777619);
   }
+  for (const value of level.noise) signature = Math.imul(signature ^ value, 16777619);
   return signature >>> 0;
 }
