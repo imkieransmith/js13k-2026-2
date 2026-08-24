@@ -26,7 +26,7 @@ button,input{font:inherit}
 .editor__stack-empty{padding:7px;background:#101a2c99;color:#70849b;font-size:10px}
 .editor__stack-entry{display:grid;grid-template-columns:1fr 23px 23px 23px;align-items:center;min-height:27px;background:#101a2c99;color:#dce7ee}
 .editor__stack-entry.is-active{outline:1px solid #fff3a6;background:#243654}
-.editor__stack-entry--wall{margin:4px 0;border-top:2px solid #a9bca2;border-bottom:2px solid #526a67;color:#eef0cf}
+.editor__stack-entry--structure{margin:4px 0;border-top:2px solid #a9bca2;border-bottom:2px solid #526a67;color:#eef0cf}
 .editor__stack-entry.is-unsupported{color:#8391a2}
 .editor__stack-select,.editor__stack-action{height:25px;padding:0;border:0;background:transparent;color:inherit;cursor:pointer}
 .editor__stack-select{text-align:left;padding-left:7px}

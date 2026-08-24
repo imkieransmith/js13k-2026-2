@@ -4,12 +4,13 @@
 export const MASK_CELL = 8;
 export const AUTHOR_TILE = 32;
 export const MAX_STACK_ENTRIES = 8;
-export const MATERIALS = ['grass', 'dirt', 'water', 'floor', 'bushes', 'stones', 'wall'];
+export const MATERIALS = ['grass', 'dirt', 'water', 'floor', 'bushes', 'stones', 'wall', 'stairs'];
 
-const CODE = { grass: 'g', dirt: 'd', water: 'w', floor: 'f', bushes: 'b', stones: 's', wall: '#' };
-const NAME = { g: 'grass', d: 'dirt', w: 'water', f: 'floor', b: 'bushes', s: 'stones', '#': 'wall' };
+const CODE = { grass: 'g', dirt: 'd', water: 'w', floor: 'f', bushes: 'b', stones: 's', wall: '#', stairs: '^' };
+const NAME = { g: 'grass', d: 'dirt', w: 'water', f: 'floor', b: 'bushes', s: 'stones', '#': 'wall', '^': 'stairs' };
 const SURFACES = 'gdwf';
 const VISUALS = 'gdwfbs';
+const STRUCTURES = '#^';
 const CACHE_SCALE = 1;
 
 /** Stable integer hash used by every unstored terrain variation. */
@@ -21,37 +22,43 @@ export function terrainHash(x, y, salt = 0) {
 
 const materialCode = material => CODE[material] || material;
 export const materialName = code => NAME[code];
-const wallIndex = stack => stack.indexOf('#');
+const structureIndex = stack => stack.findIndex(code => STRUCTURES.includes(code));
 const hasSurface = entries => entries.some(code => SURFACES.includes(code));
 
 /** Strict validation keeps corrupt level data from silently changing meaning. */
 export function validateStack(input) {
   if (!Array.isArray(input)) throw Error('Terrain stack must be an array');
-  if (input.filter(code => code !== '#').length > MAX_STACK_ENTRIES) throw Error('Terrain stack exceeds eight visual entries');
-  if (input.filter(code => code === '#').length > 1) throw Error('Terrain stack contains multiple Walls');
-  for (const code of input) if (code !== '#' && !VISUALS.includes(code)) throw Error(`Unknown terrain material: ${code}`);
-  const wall = wallIndex(input);
-  const bands = [input.slice(0, wall < 0 ? input.length : wall), wall < 0 ? [] : input.slice(wall + 1)];
+  if (input.filter(code => !STRUCTURES.includes(code)).length > MAX_STACK_ENTRIES) throw Error('Terrain stack exceeds eight visual entries');
+  if (input.filter(code => STRUCTURES.includes(code)).length > 1) throw Error('Terrain stack contains multiple structures');
+  for (const code of input) if (!STRUCTURES.includes(code) && !VISUALS.includes(code)) throw Error(`Unknown terrain material: ${code}`);
+  const structure = structureIndex(input);
+  const bands = [input.slice(0, structure < 0 ? input.length : structure), structure < 0 ? [] : input.slice(structure + 1)];
   for (const band of bands) if (new Set(band).size !== band.length) throw Error('Terrain band contains a duplicate material');
   return input;
 }
 
 function bandBounds(stack, target) {
-  const wall = wallIndex(stack);
+  const structure = structureIndex(stack);
   if (target === 'upper') {
-    if (wall < 0) throw Error('Elevated edits require Wall');
-    return [wall + 1, stack.length];
+    if (structure < 0) throw Error('Elevated edits require a structure');
+    return [structure + 1, stack.length];
   }
-  return [0, wall < 0 ? stack.length : wall];
+  return [0, structure < 0 ? stack.length : structure];
 }
 
-export const automaticBand = stack => wallIndex(stack) < 0 ? 'ground' : 'upper';
+export const automaticBand = stack => structureIndex(stack) < 0 ? 'ground' : 'upper';
 
 /** Return a canonical edited copy; the input stack is never mutated. */
 export function addStackEntry(input, material, target = 'auto') {
   validateStack(input);
   const code = materialCode(material);
-  if (code === '#') return input.includes('#') ? [...input] : validateStack([...input, '#']);
+  if (STRUCTURES.includes(code)) {
+    const index = structureIndex(input);
+    if (index < 0) return validateStack([...input, code]);
+    const stack = [...input];
+    stack[index] = code;
+    return validateStack(stack);
+  }
   if (!VISUALS.includes(code)) throw Error(`Unknown terrain material: ${material}`);
   const stack = [...input];
   const band = target === 'auto' ? automaticBand(stack) : target;
@@ -60,18 +67,18 @@ export function addStackEntry(input, material, target = 'auto') {
   if (existing >= 0 && existing < end) {
     stack.splice(existing, 1);
     [start, end] = bandBounds(stack, band);
-  } else if (stack.filter(entry => entry !== '#').length === MAX_STACK_ENTRIES) throw Error('Terrain stack is full');
+  } else if (stack.filter(entry => !STRUCTURES.includes(entry)).length === MAX_STACK_ENTRIES) throw Error('Terrain stack is full');
   stack.splice(end, 0, code);
   return validateStack(stack);
 }
 
-/** Wall removal demotes safely and retains the visually topmost duplicate. */
+/** Structure removal demotes safely and retains the visually topmost duplicate. */
 export function removeStackEntry(input, material, target = 'auto') {
   validateStack(input);
   const code = materialCode(material);
-  if (code === '#') {
-    if (!input.includes('#')) return [...input];
-    const merged = input.filter(entry => entry !== '#');
+  if (STRUCTURES.includes(code)) {
+    if (!input.includes(code)) return [...input];
+    const merged = input.filter(entry => entry !== code);
     return validateStack(merged.filter((entry, index) => merged.lastIndexOf(entry) === index));
   }
   const band = target === 'auto' ? automaticBand(input) : target;
@@ -83,7 +90,7 @@ export function removeStackEntry(input, material, target = 'auto') {
   return validateStack(stack);
 }
 
-/** Move one inspector row. Crossing Wall rejects duplicate target materials. */
+/** Move one inspector row. Crossing a structure rejects duplicate target materials. */
 export function moveStackEntry(input, index, direction) {
   validateStack(input);
   const target = index + direction;
@@ -94,7 +101,7 @@ export function moveStackEntry(input, index, direction) {
 }
 
 export function removeStackIndex(input, index) {
-  if (input[index] === '#') return removeStackEntry(input, '#');
+  if (STRUCTURES.includes(input[index])) return removeStackEntry(input, input[index]);
   const stack = [...input];
   stack.splice(index, 1);
   return validateStack(stack);
@@ -312,10 +319,10 @@ export function paintCollisionRect(level, x0, y0, x1, y1, value = 1) {
 }
 
 function splitBands(stack) {
-  const wall = wallIndex(stack);
+  const structure = structureIndex(stack);
   return {
-    ground: stack.slice(0, wall < 0 ? stack.length : wall),
-    upper: wall < 0 ? [] : stack.slice(wall + 1),
+    ground: stack.slice(0, structure < 0 ? stack.length : structure),
+    upper: structure < 0 ? [] : stack.slice(structure + 1),
   };
 }
 
@@ -383,6 +390,7 @@ function prepareLayers(level) {
   const groundSupport = new Uint8Array(count);
   const upperSupport = new Uint8Array(count);
   const walls = new Uint8Array(count);
+  const stairs = new Uint8Array(count);
   level.tileStacks.forEach((stack, index) => {
     const bands = splitBands(stack);
     bands.ground.forEach((code, slot) => { ground[index * MAX_STACK_ENTRIES + slot] = NUMBER[code]; });
@@ -390,8 +398,9 @@ function prepareLayers(level) {
     groundSupport[index] = hasSurface(bands.ground);
     upperSupport[index] = hasSurface(bands.upper);
     walls[index] = stack.includes('#');
+    stairs[index] = stack.includes('^');
   });
-  return { ground, upper, groundSupport, upperSupport, walls };
+  return { ground, upper, groundSupport, upperSupport, walls, stairs };
 }
 
 function supportAt(level, support, x, y) {
@@ -455,18 +464,21 @@ function drawBand(image, level, slots, support, upper = false) {
   }
 }
 
-function drawWalls(image, level, walls) {
-  const wallAt = (x, y) => {
+function drawWalls(image, level, walls, stairs) {
+  const at = (field, x, y) => {
     const index = tileIndex(level, x, y);
-    return index < 0 ? 0 : walls[index];
+    return index < 0 ? 0 : field[index];
   };
+  const wallAt = (x, y) => at(walls, x, y);
   // Joined rows are solid mass; only each exposed southern row emits the
   // two-tile facade and its pale lip, avoiding repeated horizontal stripes.
   for (let y = 0; y < level.tileHeight; y++) for (let x = 0; x < level.tileWidth; x++) {
     if (!wallAt(x, y)) continue;
     const worldX = x * AUTHOR_TILE;
     const worldY = y * AUTHOR_TILE;
-    const facade = !wallAt(x, y + 1);
+    // Stairs directly south continue the raised mass instead of exposing a
+    // second Wall facade behind the staircase and pushing the platform back.
+    const facade = !wallAt(x, y + 1) && !at(stairs, x, y + 1);
     fillRect(image, worldX, worldY, AUTHOR_TILE, 32, [77, 102, 99]);
     if (facade) {
       fillRect(image, worldX, worldY, AUTHOR_TILE, 32, [123, 146, 137]);
@@ -474,6 +486,9 @@ function drawWalls(image, level, walls) {
       fillRect(image, worldX, worldY, AUTHOR_TILE, 3, [231, 232, 203]);
       fillRect(image, worldX, worldY + 63, AUTHOR_TILE, 2, [46, 68, 70]);
     }
+    // The back edge completes the raised perimeter; facade and side edges
+    // below join it through convex and concave corners.
+    if (!wallAt(x, y - 1)) fillRect(image, worldX, worldY, AUTHOR_TILE, 3, [231, 232, 203]);
     const height = facade ? 63 : 32;
     if (!wallAt(x - 1, y)) fillRect(image, worldX, worldY, 3, height, [190, 201, 180]);
     if (!wallAt(x + 1, y)) fillRect(image, worldX + AUTHOR_TILE - 3, worldY, 3, height, [190, 201, 180]);
@@ -497,6 +512,27 @@ function drawUpperEdges(image, level, support) {
   }
 }
 
+/** South-facing stairs replace the raised lip and join into broad runs. */
+function drawStairs(image, level, stairs, walls) {
+  const at = (field, x, y) => {
+    const index = tileIndex(level, x, y);
+    return index < 0 ? 0 : field[index];
+  };
+  for (let y = 0; y < level.tileHeight; y++) for (let x = 0; x < level.tileWidth; x++) {
+    if (!at(stairs, x, y)) continue;
+    const worldX = x * AUTHOR_TILE;
+    const worldY = y * AUTHOR_TILE;
+    for (let step = 0; step < 64; step += 8) {
+      fillRect(image, worldX, worldY + step, AUTHOR_TILE, 6, [190, 201, 180]);
+      fillRect(image, worldX, worldY + step, AUTHOR_TILE, 1, [238, 240, 207]);
+      fillRect(image, worldX, worldY + step + 6, AUTHOR_TILE, 2, [123, 146, 137]);
+    }
+    if (!at(stairs, x - 1, y) && !at(walls, x - 1, y)) fillRect(image, worldX, worldY, 4, 64, [231, 232, 203]);
+    if (!at(stairs, x + 1, y) && !at(walls, x + 1, y)) fillRect(image, worldX + AUTHOR_TILE - 4, worldY, 4, 64, [77, 102, 99]);
+    if (!at(stairs, x, y + 2)) fillRect(image, worldX, worldY + 62, AUTHOR_TILE, 2, [46, 68, 70]);
+  }
+}
+
 /** Bake the ordered stack once; gameplay only crops this static canvas. */
 export function buildTerrain(level, scale = CACHE_SCALE, canvas = document.createElement('canvas')) {
   canvas.width = Math.ceil(level.width / scale);
@@ -506,9 +542,10 @@ export function buildTerrain(level, scale = CACHE_SCALE, canvas = document.creat
   for (let y = 0; y < image.height; y++) for (let x = 0; x < image.width; x++) setPixel(image, x, y, RGB[0]);
   const layers = prepareLayers(level);
   drawBand(image, level, layers.ground, layers.groundSupport);
-  drawWalls(image, level, layers.walls);
+  drawWalls(image, level, layers.walls, layers.stairs);
   drawBand(image, level, layers.upper, layers.upperSupport, true);
   drawUpperEdges(image, level, layers.upperSupport);
+  drawStairs(image, level, layers.stairs, layers.walls);
   context.putImageData(image, 0, 0);
   return { canvas, level, scale };
 }

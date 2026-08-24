@@ -31,13 +31,13 @@ const inspectorEmpty = document.querySelector('#editor-inspector-empty');
 const inspectorLayers = document.querySelector('#editor-inspector-layers');
 const colours = {
   grass: '#68d48b', dirt: '#b98962', water: '#62b8ed', stones: '#dbe0ca',
-  floor: '#fff3a6', bushes: '#469a45', wall: '#81998a', collision: '#ff315a',
+  floor: '#fff3a6', bushes: '#469a45', wall: '#81998a', stairs: '#e7d6a5', collision: '#ff315a',
 };
 const labels = {
   grass: 'Grass', dirt: 'Dirt', water: 'Water', stones: 'Stones',
-  floor: 'Floor', bushes: 'Bushes', wall: 'Wall', collision: 'Collision',
+  floor: 'Floor', bushes: 'Bushes', wall: 'Wall', stairs: 'Stairs', collision: 'Collision',
 };
-const editorKinds = ['grass', 'dirt', 'water', 'stones', 'floor', 'bushes', 'wall', 'collision'];
+const editorKinds = ['grass', 'dirt', 'water', 'stones', 'floor', 'bushes', 'wall', 'stairs', 'collision'];
 const surfaceCodes = 'gdwf';
 
 let level = unpackLevel(levelSource);
@@ -74,10 +74,11 @@ const setStatus = message => { status.textContent = message; };
 const gridSize = (kind = selectedKind) => kind === 'collision' ? level.cell : AUTHOR_TILE;
 const gridWidth = size => size === level.cell ? level.collisionWidth : level.tileWidth;
 const gridHeight = size => size === level.cell ? level.collisionHeight : level.tileHeight;
-const stackBand = (stack, index) => index > stack.indexOf('#') && stack.includes('#') ? 'upper' : 'ground';
+const structureIndex = stack => stack.findIndex(code => '#^'.includes(code));
+const stackBand = (stack, index) => index > structureIndex(stack) && structureIndex(stack) >= 0 ? 'upper' : 'ground';
 const bandEntries = (stack, band) => {
-  const wall = stack.indexOf('#');
-  return band === 'upper' ? wall < 0 ? [] : stack.slice(wall + 1) : stack.slice(0, wall < 0 ? stack.length : wall);
+  const structure = structureIndex(stack);
+  return band === 'upper' ? structure < 0 ? [] : stack.slice(structure + 1) : stack.slice(0, structure < 0 ? stack.length : structure);
 };
 const bandSupported = entries => entries.some(code => surfaceCodes.includes(code));
 
@@ -103,16 +104,16 @@ function updateInspector() {
     inspectorLayers.append(empty);
     return;
   }
-  const wall = stack.indexOf('#');
   const groundSupport = bandSupported(bandEntries(stack, 'ground'));
   const upperSupport = bandSupported(bandEntries(stack, 'upper'));
   for (let index = stack.length - 1; index >= 0; index--) {
     const code = stack[index];
     const kind = materialName(code);
-    const band = code === '#' ? 'wall' : stackBand(stack, index);
+    const structural = '#^'.includes(code);
+    const band = structural ? 'structure' : stackBand(stack, index);
     const unsupported = (code === 'b' || code === 's') && !(band === 'upper' ? upperSupport : groundSupport);
     const row = document.createElement('div');
-    row.className = `editor__stack-entry${code === '#' ? ' editor__stack-entry--wall' : ''}${unsupported ? ' is-unsupported' : ''}`;
+    row.className = `editor__stack-entry${structural ? ' editor__stack-entry--structure' : ''}${unsupported ? ' is-unsupported' : ''}`;
     if (kind === selectedKind && (targetBand === band || targetBand === 'auto')) row.classList.add('is-active');
     const select = document.createElement('button');
     select.className = 'editor__stack-select';
@@ -138,7 +139,7 @@ function updateInspector() {
     remove.dataset.stackAction = 'remove';
     remove.dataset.stackIndex = index;
     remove.textContent = '×';
-    remove.title = code === '#' ? 'Remove Wall and demote elevated entries' : `Remove ${labels[kind]}`;
+    remove.title = structural ? `Remove ${labels[kind]} and demote elevated entries` : `Remove ${labels[kind]}`;
     row.append(select, up, down, remove);
     inspectorLayers.append(row);
   }
@@ -220,10 +221,31 @@ function redo() {
   restore(after, 'Redid gesture');
 }
 
+/** Resolve the visible face/base and collapse accidental vertical Stair duplicates. */
+function stairResolution(cell, erasing) {
+  let stairs = null;
+  for (let y = cell.y; y >= 0 && y >= cell.y - 2; y--) {
+    const stack = stackAt(level, cell.x, y);
+    if (stack?.includes('^')) {
+      const found = { x: cell.x, y };
+      if (erasing) return { anchor: found, cleanup: [] };
+      if (stairs) return { anchor: found, cleanup: [stairs] };
+      stairs = found;
+    } else if (stack?.includes('#') && !erasing) return { anchor: stairs || { x: cell.x, y }, cleanup: [] };
+  }
+  return { anchor: stairs || cell, cleanup: [] };
+}
+
 function markCell(cell) {
   const size = gestureSize;
+  const source = cell;
+  if (gestureKind === 'stairs') cell = stairResolution(cell, eraseStroke).anchor;
   if (cell.x < 0 || cell.y < 0 || cell.x >= gridWidth(size) || cell.y >= gridHeight(size)) return;
-  pendingCells.set(`${cell.x}:${cell.y}`, { ...cell, size, kind: gestureKind, erasing: eraseStroke });
+  const key = `${cell.x}:${cell.y}`;
+  const previous = pendingCells.get(key);
+  if (!previous || source.y > previous.sourceY) pendingCells.set(key, {
+    ...cell, sourceX: source.x, sourceY: source.y, size, kind: gestureKind, erasing: eraseStroke,
+  });
 }
 
 function markDab(cell) {
@@ -289,6 +311,18 @@ function applyCells(cells, erasing, kind = selectedKind, target = targetBand) {
     for (const cell of cells) changed = paintCollisionCell(level, cell.x, cell.y, erasing ? 0 : 1) || changed;
     return changed;
   }
+  if (kind === 'stairs') {
+    const actions = new Map();
+    for (const cell of cells) {
+      const source = { x: cell.sourceX ?? cell.x, y: cell.sourceY ?? cell.y };
+      const resolution = stairResolution(source, erasing);
+      if (!erasing) for (const stale of resolution.cleanup) actions.set(`${stale.x}:${stale.y}`, { ...stale, action: 'remove' });
+      actions.set(`${resolution.anchor.x}:${resolution.anchor.y}`, { ...resolution.anchor, action: erasing ? 'remove' : 'add' });
+    }
+    cells = [...actions.values()];
+    return editStackCells(level, cells, (stack, x, y) => actions.get(`${x}:${y}`).action === 'remove'
+      ? removeStackEntry(stack, kind, target) : addStackEntry(stack, kind, target));
+  }
   return editStackCells(level, cells, stack => erasing
     ? removeStackEntry(stack, kind, target)
     : addStackEntry(stack, kind, target));
@@ -347,7 +381,10 @@ canvas.addEventListener('pointerdown', event => {
   }
   eraseStroke = event.button === 2 || selectedMode === 'erase';
   if (selectedMode === 'fill') {
-    commitCells(floodCells(cell), eraseStroke, 'Filled region');
+    const resolution = selectedKind === 'stairs' ? stairResolution(cell, eraseStroke) : { anchor: cell };
+    const cells = floodCells(resolution.anchor);
+    if (resolution.anchor.x !== cell.x || resolution.anchor.y !== cell.y) cells.push(cell);
+    commitCells(cells, eraseStroke, 'Filled region');
     return;
   }
   activePointer = event.pointerId;
@@ -419,7 +456,7 @@ panel.addEventListener('click', async event => {
     const inspected = stackAt(level, inspectorCell.x, inspectorCell.y);
     if (stackAction === 'select') {
       selectedKind = materialName(inspected[index]);
-      targetBand = inspected[index] === '#' ? 'auto' : stackBand(inspected, index);
+      targetBand = '#^'.includes(inspected[index]) ? 'auto' : stackBand(inspected, index);
       selectedMode = 'pencil';
     } else if (stackAction === 'remove') {
       changeInspectedStack(stack => removeStackIndex(stack, index), 'Removed stack entry');
@@ -490,7 +527,7 @@ window.addEventListener('keydown', event => {
     event.preventDefault();
     redo();
   }
-  if ('12345678'.includes(event.key)) selectedKind = editorKinds[Number(event.key) - 1];
+  if ('123456789'.includes(event.key)) selectedKind = editorKinds[Number(event.key) - 1];
   const modeKey = { p: 'pencil', r: 'rectangle', f: 'fill', e: 'erase', i: 'inspect' }[event.key.toLowerCase()];
   if (modeKey) selectedMode = modeKey;
   if (event.key === 'Escape') targetBand = 'auto';
@@ -525,9 +562,9 @@ function drawCollision(bounds) {
 }
 
 function selectedInStack(stack) {
-  if (selectedKind === 'wall') return stack.includes('#');
+  if (selectedKind === 'wall' || selectedKind === 'stairs') return stack.includes(selectedKind === 'wall' ? '#' : '^');
   const code = { grass: 'g', dirt: 'd', water: 'w', floor: 'f', bushes: 'b', stones: 's' }[selectedKind];
-  const band = targetBand === 'auto' ? (stack.includes('#') ? 'upper' : 'ground') : targetBand;
+  const band = targetBand === 'auto' ? (structureIndex(stack) < 0 ? 'ground' : 'upper') : targetBand;
   return bandEntries(stack, band).includes(code);
 }
 

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { createServer } from 'vite';
-import { collisionAt, stackKeyAt, unpackLevel } from '../src/terrain.js';
+import { collisionAt, packLevel, stackKeyAt, unpackLevel } from '../src/terrain.js';
 
 /** Minimal DOM/event harness that executes the shipped editor module through Vite. */
 class FakeClassList {
@@ -82,7 +82,7 @@ const status = new FakeElement('p');
 const coordinates = new FakeElement('span');
 const inspectorEmpty = new FakeElement('p');
 const inspectorLayers = new FakeElement('div');
-const kinds = ['grass', 'dirt', 'water', 'stones', 'floor', 'bushes', 'wall', 'collision'].map(kind => {
+const kinds = ['grass', 'dirt', 'water', 'stones', 'floor', 'bushes', 'wall', 'stairs', 'collision'].map(kind => {
   const button = new FakeElement('button');
   button.dataset.kind = kind;
   return button;
@@ -224,16 +224,105 @@ try {
   const rejectedBefore = savedBody;
   await canvas.dispatch('pointerdown', { ...pointForTile(34, 10), pointerId: 17 });
   await canvas.dispatch('pointerup', { ...pointForTile(34, 10), pointerId: 17 });
-  assert.match(status.textContent, /require Wall/);
+  assert.match(status.textContent, /require.*structure/i);
   await saveLevel();
   assert.equal(savedBody, rejectedBefore, 'Rejected elevated gesture changed saved state or palette');
 
+  // Stairs replace Wall atomically, preserve both bands, and demote safely.
+  await click(buttonFor(targets, 'target', 'auto'));
+  await click(buttonFor(kinds, 'kind', 'wall'));
+  const structurePoint = pointForTile(35, 10);
+  await canvas.dispatch('pointerdown', { ...structurePoint, pointerId: 18 });
+  await canvas.dispatch('pointerup', { ...structurePoint, pointerId: 18 });
+  await flushRaf();
+  assert.equal(stackKeyAt(await saveLevel(), 35, 10), 'g#');
+  await click(buttonFor(kinds, 'kind', 'stairs'));
+  await canvas.dispatch('pointerdown', { ...structurePoint, pointerId: 19 });
+  await canvas.dispatch('pointerup', { ...structurePoint, pointerId: 19 });
+  await flushRaf();
+  assert.equal(stackKeyAt(await saveLevel(), 35, 10), 'g^', 'Stairs did not replace Wall in place');
+  await click(buttonFor(actions, 'action', 'undo'));
+  await flushRaf();
+  assert.equal(stackKeyAt(await saveLevel(), 35, 10), 'g#', 'Structure replacement was not one undo step');
+  await click(buttonFor(actions, 'action', 'redo'));
+  await flushRaf();
+  await click(buttonFor(kinds, 'kind', 'floor'));
+  await canvas.dispatch('pointerdown', { ...structurePoint, pointerId: 20 });
+  await canvas.dispatch('pointerup', { ...structurePoint, pointerId: 20 });
+  await flushRaf();
+  assert.equal(stackKeyAt(await saveLevel(), 35, 10), 'g^f');
+  await click(buttonFor(kinds, 'kind', 'stairs'));
+  await click(buttonFor(modes, 'mode', 'erase'));
+  await canvas.dispatch('pointerdown', { ...structurePoint, pointerId: 21 });
+  await canvas.dispatch('pointerup', { ...structurePoint, pointerId: 21 });
+  await flushRaf();
+  assert.equal(stackKeyAt(await saveLevel(), 35, 10), 'gf', 'Erasing Stairs did not demote Elevated entries');
+  await click(buttonFor(actions, 'action', 'undo'));
+  await flushRaf();
+  assert.equal(stackKeyAt(await saveLevel(), 35, 10), 'g^f');
+
+  // Clicking the visible lower half of a Wall redirects Stairs to its anchor.
+  await click(buttonFor(modes, 'mode', 'pencil'));
+  await click(buttonFor(kinds, 'kind', 'wall'));
+  const projectedAnchor = pointForTile(36, 10);
+  await canvas.dispatch('pointerdown', { ...projectedAnchor, pointerId: 22 });
+  await canvas.dispatch('pointerup', { ...projectedAnchor, pointerId: 22 });
+  await flushRaf();
+  await click(buttonFor(kinds, 'kind', 'stairs'));
+  const projectedFace = pointForTile(36, 11);
+  await canvas.dispatch('pointerdown', { ...projectedFace, pointerId: 23 });
+  await canvas.dispatch('pointerup', { ...projectedFace, pointerId: 23 });
+  await flushRaf();
+  saved = await saveLevel();
+  assert.equal(stackKeyAt(saved, 36, 10), 'g^', 'Projected Wall face did not target its structural anchor');
+  assert.equal(stackKeyAt(saved, 36, 11), 'g', 'Projected Stairs created a second structure row');
+
+  // Clicking the ground cell at the foot of the two-tile projection also targets the Wall.
+  await click(buttonFor(kinds, 'kind', 'wall'));
+  const baseAnchor = pointForTile(37, 10);
+  await canvas.dispatch('pointerdown', { ...baseAnchor, pointerId: 24 });
+  await canvas.dispatch('pointerup', { ...baseAnchor, pointerId: 24 });
+  await flushRaf();
+  await click(buttonFor(kinds, 'kind', 'stairs'));
+  const projectedBase = pointForTile(37, 12);
+  await canvas.dispatch('pointerdown', { ...projectedBase, pointerId: 25 });
+  await canvas.dispatch('pointerup', { ...projectedBase, pointerId: 25 });
+  await flushRaf();
+  saved = await saveLevel();
+  assert.equal(stackKeyAt(saved, 37, 10), 'g^', 'Wall base click did not target the anchor two rows north');
+  assert.equal(stackKeyAt(saved, 37, 12), 'g', 'Wall base click created another Stair row');
+  await canvas.dispatch('pointerdown', { ...projectedBase, pointerId: 26 });
+  await canvas.dispatch('pointerup', { ...projectedBase, pointerId: 26 });
+  await flushRaf();
+  assert.equal(stackKeyAt(await saveLevel(), 37, 12), 'g', 'Repeated base click extended the staircase');
+
+  // One repaint repairs stair rows created two tiles apart by the old editor.
+  saved = await saveLevel();
+  saved.tileStacks[10 * saved.tileWidth + 38] = ['g', '^'];
+  saved.tileStacks[12 * saved.tileWidth + 38] = ['g', '^'];
+  reloadBody = JSON.stringify(packLevel(saved));
+  await click(buttonFor(actions, 'action', 'load'));
+  await flushRaf();
+  const duplicateStairs = pointForTile(38, 12);
+  await canvas.dispatch('pointerdown', { ...duplicateStairs, pointerId: 27 });
+  await canvas.dispatch('pointerup', { ...duplicateStairs, pointerId: 27 });
+  await flushRaf();
+  saved = await saveLevel();
+  assert.equal(stackKeyAt(saved, 38, 10), 'g^');
+  assert.equal(stackKeyAt(saved, 38, 12), 'g', 'Repaint did not collapse the old duplicate Stair row');
+  await click(buttonFor(actions, 'action', 'undo'));
+  await flushRaf();
+  assert.equal(stackKeyAt(await saveLevel(), 38, 12), 'g^', 'Duplicate repair was not one undo step');
+  await click(buttonFor(actions, 'action', 'redo'));
+  await flushRaf();
+
   // Fine Collision remains independent and survives save/reload.
   await click(buttonFor(targets, 'target', 'auto'));
+  await click(buttonFor(modes, 'mode', 'pencil'));
   await click(buttonFor(kinds, 'kind', 'collision'));
   const collisionPoint = pointForTile(150, 100, true);
-  await canvas.dispatch('pointerdown', { ...collisionPoint, pointerId: 18 });
-  await canvas.dispatch('pointerup', { ...collisionPoint, pointerId: 18 });
+  await canvas.dispatch('pointerdown', { ...collisionPoint, pointerId: 28 });
+  await canvas.dispatch('pointerup', { ...collisionPoint, pointerId: 28 });
   await flushRaf();
   saved = await saveLevel();
   assert.equal(collisionAt(saved, 150, 100), 1);

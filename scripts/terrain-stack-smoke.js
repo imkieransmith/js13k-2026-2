@@ -11,6 +11,8 @@ import { build } from 'vite';
 const TILE = 32;
 const MAX_ENTRIES = 8;
 const WALL = '#';
+const STAIRS = '^';
+const STRUCTURES = new Set([WALL, STAIRS]);
 const MATERIALS = new Set(['g', 'd', 'w', 'f', 'b', 's']);
 const SURFACES = new Set(['g', 'd', 'w', 'f']);
 const COLOURS = {
@@ -19,25 +21,25 @@ const COLOURS = {
 const BACKDROP = [23, 45, 63];
 
 const clone = stack => [...stack];
-const wallIndex = stack => stack.indexOf(WALL);
+const structureIndex = stack => stack.findIndex(entry => STRUCTURES.has(entry));
 const bandBounds = (stack, band) => {
-  const wall = wallIndex(stack);
+  const structure = structureIndex(stack);
   if (band === 'upper') {
-    if (wall < 0) throw Error('Elevated edits require Wall');
-    return [wall + 1, stack.length];
+    if (structure < 0) throw Error('Elevated edits require a structure');
+    return [structure + 1, stack.length];
   }
-  return [0, wall < 0 ? stack.length : wall];
+  return [0, structure < 0 ? stack.length : structure];
 };
-const automaticBand = stack => wallIndex(stack) < 0 ? 'ground' : 'upper';
+const automaticBand = stack => structureIndex(stack) < 0 ? 'ground' : 'upper';
 
 /** Strict canonical validation: corrupt input is rejected, never guessed. */
 function validateStack(stack) {
   if (!Array.isArray(stack)) throw Error('Stack must be an array');
-  if (stack.filter(entry => entry !== WALL).length > MAX_ENTRIES) throw Error('Stack exceeds eight visual entries');
-  if (stack.filter(entry => entry === WALL).length > 1) throw Error('Stack has multiple Walls');
-  for (const entry of stack) if (entry !== WALL && !MATERIALS.has(entry)) throw Error(`Unknown material ${entry}`);
-  const wall = wallIndex(stack);
-  for (const [start, end] of [[0, wall < 0 ? stack.length : wall], [wall + 1, stack.length]]) {
+  if (stack.filter(entry => !STRUCTURES.has(entry)).length > MAX_ENTRIES) throw Error('Stack exceeds eight visual entries');
+  if (stack.filter(entry => STRUCTURES.has(entry)).length > 1) throw Error('Stack has multiple structures');
+  for (const entry of stack) if (!STRUCTURES.has(entry) && !MATERIALS.has(entry)) throw Error(`Unknown material ${entry}`);
+  const structure = structureIndex(stack);
+  for (const [start, end] of [[0, structure < 0 ? stack.length : structure], [structure + 1, stack.length]]) {
     const seen = new Set();
     for (let i = Math.max(0, start); i < end; i++) {
       if (seen.has(stack[i])) throw Error('Duplicate material within one band');
@@ -49,9 +51,12 @@ function validateStack(stack) {
 
 function addEntry(input, entry, target = 'auto') {
   validateStack(input);
-  if (entry === WALL) {
-    if (input.includes(WALL)) return clone(input);
-    return validateStack([...input, WALL]);
+  if (STRUCTURES.has(entry)) {
+    const index = structureIndex(input);
+    if (index < 0) return validateStack([...input, entry]);
+    const stack = clone(input);
+    stack[index] = entry;
+    return validateStack(stack);
   }
   if (!MATERIALS.has(entry)) throw Error(`Unknown material ${entry}`);
   const stack = clone(input);
@@ -61,7 +66,7 @@ function addEntry(input, entry, target = 'auto') {
   if (found >= 0 && found < end) {
     stack.splice(found, 1);
     [start, end] = bandBounds(stack, band);
-  } else if (stack.filter(value => value !== WALL).length === MAX_ENTRIES) {
+  } else if (stack.filter(value => !STRUCTURES.has(value)).length === MAX_ENTRIES) {
     throw Error('Stack is full');
   }
   stack.splice(end, 0, entry);
@@ -83,10 +88,10 @@ function moveAcrossWall(input, index, targetBand) {
 
 function removeEntry(input, entry, target = 'auto') {
   validateStack(input);
-  if (entry === WALL) {
-    const wall = wallIndex(input);
-    if (wall < 0) return clone(input);
-    const merged = input.filter(value => value !== WALL);
+  if (STRUCTURES.has(entry)) {
+    const structure = structureIndex(input);
+    if (structure < 0 || input[structure] !== entry) return clone(input);
+    const merged = input.filter(value => value !== entry);
     const seen = new Set();
     // Retain the visually topmost duplicate after concatenating both bands.
     return validateStack(merged.filter((value, index) => {
@@ -300,10 +305,10 @@ const hash = (x, y, salt = 0) => {
 };
 
 const splitBands = stack => {
-  const wall = wallIndex(stack);
+  const structure = structureIndex(stack);
   return {
-    ground: stack.slice(0, wall < 0 ? stack.length : wall),
-    upper: wall < 0 ? [] : stack.slice(wall + 1),
+    ground: stack.slice(0, structure < 0 ? stack.length : structure),
+    upper: structure < 0 ? [] : stack.slice(structure + 1),
   };
 };
 const supports = band => band.some(entry => SURFACES.has(entry));
@@ -416,14 +421,16 @@ function drawWalls(raster, level) {
     if (!hasWall(x, y)) continue;
     const worldX = x * TILE;
     const baseline = (y + 2) * TILE;
-    if (hasWall(x, y + 1)) {
+    if (hasWall(x, y + 1) || tileStack(level, x, y + 1).includes(STAIRS)) {
       raster.rect(worldX, y * TILE, TILE, TILE, [77, 102, 99]);
+      if (!hasWall(x, y - 1)) raster.rect(worldX, y * TILE, TILE, 3, [231, 232, 203]);
       continue;
     }
     raster.rect(worldX, baseline - 64, TILE, 32, [123, 146, 137]);
     raster.rect(worldX, baseline - 32, TILE, 32, [77, 102, 99]);
     raster.rect(worldX, baseline - 64, TILE, 3, [231, 232, 203]);
     raster.rect(worldX, baseline - 1, TILE, 2, [46, 68, 70]);
+    if (!hasWall(x, y - 1)) raster.rect(worldX, y * TILE, TILE, 3, [231, 232, 203]);
   }
 }
 
@@ -442,6 +449,22 @@ function drawUpperEdges(raster, level) {
   }
 }
 
+function drawStairs(raster, level) {
+  const has = (entry, x, y) => tileStack(level, x, y).includes(entry);
+  for (let y = 0; y < level.height; y++) for (let x = 0; x < level.width; x++) {
+    if (!has(STAIRS, x, y)) continue;
+    const worldX = x * TILE;
+    const worldY = y * TILE;
+    for (let step = 0; step < 64; step += 8) {
+      raster.rect(worldX, worldY + step, TILE, 6, [190, 201, 180]);
+      raster.rect(worldX, worldY + step, TILE, 1, [238, 240, 207]);
+      raster.rect(worldX, worldY + step + 6, TILE, 2, [123, 146, 137]);
+    }
+    if (!has(STAIRS, x - 1, y) && !has(WALL, x - 1, y)) raster.rect(worldX, worldY, 4, 64, [231, 232, 203]);
+    if (!has(STAIRS, x + 1, y) && !has(WALL, x + 1, y)) raster.rect(worldX + TILE - 4, worldY, 4, 64, [77, 102, 99]);
+  }
+}
+
 function renderLevel(level) {
   const raster = makeRaster(level.width * TILE, level.height * TILE);
   raster.fill(BACKDROP);
@@ -449,6 +472,7 @@ function renderLevel(level) {
   drawWalls(raster, level);
   drawBand(raster, level, 'upper');
   drawUpperEdges(raster, level);
+  drawStairs(raster, level);
   return raster;
 }
 
@@ -479,7 +503,8 @@ function fixtureLevel() {
   setStack(level, 7, 4, ['f', 'b', 'g', WALL, 'f', 's', 'g']);
   setStack(level, 8, 4, ['f', 'g', WALL, 'f', 'g', 'b']);
   setStack(level, 9, 4, ['f', 's', 'g', WALL, 'f', 'w']);
-  setStack(level, 10, 4, ['f', 'g', WALL, 'f']);
+  setStack(level, 10, 4, ['f', 'g', STAIRS, 'f']);
+  setStack(level, 11, 4, ['f', 'g', STAIRS, 'f']);
   return level;
 }
 
@@ -532,14 +557,17 @@ function assertContract() {
   assert.equal(keyOf(stack), 'fg#fgw');
   assert.equal(keyOf(addEntry(['#', 'f', 'g'], 'f')), '#gf');
   assert.equal(keyOf(addEntry(['f', WALL, 'g'], 'd', 'ground')), 'fd#g');
+  assert.equal(keyOf(addEntry(['f', WALL, 'g'], STAIRS)), 'f^g');
+  assert.equal(keyOf(addEntry(['f', STAIRS, 'g'], WALL)), 'f#g');
   assert.throws(() => moveAcrossWall(['g', WALL, 'g'], 2, 'ground'), /already contains/);
   assert.deepEqual(removeEntry(['g', WALL, 'f', 'g'], WALL), ['f', 'g']);
+  assert.deepEqual(removeEntry(['g', STAIRS, 'f', 'g'], STAIRS), ['f', 'g']);
   assert.deepEqual(addEntry([], 'b'), ['b']);
   assert.equal(supports(['b']), false);
   assert.throws(() => addEntry(['g', 'd', 'w', 'f', 'b', 's', WALL, 'g', 'f'], 'd'), /full/);
-  assert.throws(() => addEntry(['g'], 'f', 'upper'), /require Wall/);
+  assert.throws(() => addEntry(['g'], 'f', 'upper'), /require.*structure/i);
   assert.throws(() => validateStack(['g', 'g']), /Duplicate/);
-  assert.throws(() => validateStack(['#', '#']), /multiple/);
+  assert.throws(() => validateStack(['#', '^']), /multiple/);
   assert.throws(() => validateStack(['?']), /Unknown/);
 
   const before = [['g'], ['g', 'd']];
@@ -579,11 +607,12 @@ function assertRendering() {
   setStack(movement, 1, 0, ['b']);
   setStack(movement, 2, 0, ['f', WALL]);
   setStack(movement, 3, 0, ['f', WALL, 'w']);
-  setStack(movement, 4, 0, ['f', 's']);
+  setStack(movement, 4, 0, ['f', STAIRS, 'w']);
   assert.equal(walkableAt(movement, 0, 0), true, 'Visual Water should be walkable');
   assert.equal(walkableAt(movement, 1, 0), false, 'Decoration must not create support');
   assert.equal(walkableAt(movement, 2, 0), true, 'Wall must not imply Collision');
   assert.equal(walkableAt(movement, 3, 0), true, 'Elevated Water should be walkable');
+  assert.equal(walkableAt(movement, 4, 0), true, 'Stairs should be walkable');
   movement.collision[2 * movement.width * 4 + 2] = 1;
   assert.equal(walkableAt(movement, 0, 0), false, 'Collision must block Water');
 
@@ -629,6 +658,15 @@ function assertRendering() {
   assert.equal(countColour(renderLevel(propsBelow), bush), 0, 'Later surface did not cover earlier Bushes');
   assert.ok(countColour(renderLevel(propsAbove), bush) > 0, 'Top Bushes did not remain visible');
   assert.equal(countColour(renderLevel(unsupported), bush), 0, 'Unsupported decoration rendered without a surface');
+
+  const stairLevel = makeLevel(3, 3, 11);
+  setStack(stairLevel, 0, 0, ['f', STAIRS, 'f']);
+  setStack(stairLevel, 1, 0, ['f', STAIRS, 'f']);
+  const stairImage = renderLevel(stairLevel);
+  const stairPixel = (x, y) => [...stairImage.data.subarray((y * stairImage.width + x) * 3, (y * stairImage.width + x) * 3 + 3)];
+  assert.deepEqual(stairPixel(TILE, 4), [190, 201, 180], 'Joined Stairs emitted an internal rail');
+  assert.deepEqual(stairPixel(1, 16), [231, 232, 203], 'Stairs are missing their outer rail');
+  assert.deepEqual(stairPixel(16, 62), [123, 146, 137], 'Stairs did not span the Wall height');
 
   const strictUpper = makeLevel(1, 1, 12);
   setStack(strictUpper, 0, 0, ['f', WALL, 'd']);
