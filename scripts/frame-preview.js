@@ -149,7 +149,11 @@ globalThis.document = {
 };
 globalThis.devicePixelRatio = 1;
 globalThis.performance = { now: () => now };
-globalThis.addEventListener = () => {};
+// Real listeners are kept so the preview can drive the player with synthetic
+// key events; a still frame of a game whose camera never moves can only ever
+// show one corner of the level.
+const listeners = {};
+globalThis.addEventListener = (type, handler) => { (listeners[type] ||= []).push(handler); };
 globalThis.requestAnimationFrame = callback => { scheduled = callback; };
 globalThis.ResizeObserver = class { observe() {} };
 globalThis.btoa = value => Buffer.from(value, 'binary').toString('base64');
@@ -157,9 +161,14 @@ globalThis.atob = value => Buffer.from(value, 'base64').toString('binary');
 
 await import('../src/game.js');
 
+const options = Object.fromEntries(process.argv.slice(2).map(argument => argument.split('=')));
+const outPath = options.out || 'dist/frame.png';
+const cropArgs = options.crop;
+for (const code of (options.hold || '').split(',').filter(Boolean)) {
+  for (const handler of listeners.keydown || []) handler({ code, repeat: false, preventDefault() {} });
+}
 // Let the encounter run long enough for enemies to leave their spawn pose.
-const [, , outPath = 'dist/frame.png', frames = '150', cropArgs] = process.argv;
-for (let frame = 0; frame < Number(frames); frame++) {
+for (let frame = 0; frame < Number(options.frames || 150); frame++) {
   const next = scheduled;
   scheduled = null;
   now += 1000 / 60;

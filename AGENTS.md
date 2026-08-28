@@ -82,16 +82,17 @@ You may still submit a PR to fix critical issues that prevent your game from bei
 
 
 ## Development tooling
-There is no browser in this toolchain, so two dev-only scripts stand in for one:
+There is no browser in this toolchain, so these dev-only scripts stand in for one:
 
 - `npm run preview:art -- <out.png> [x,y,w,h]` bakes the real terrain headless and
   writes a PNG. With a crop it also applies a stand-in for the runtime light
   shafts and colour grade, so a crop previews roughly what the player sees.
   Those numbers are duplicated from `game.js` and must be kept in step by hand.
-- `npm run preview:frame -- <out.png> [frames] [x,y,w,h,zoom]` renders a real
-  frame by handing `game.js` a rasterising 2D context, so sprites, shafts,
-  motes and the grade can be judged together. The crop takes a magnification,
-  which is the only practical way to look at a 20px sprite.
+- `npm run preview:frame -- out=<png> [frames=N] [crop=x,y,w,h,zoom] [hold=KeyA]`
+  renders a real frame by handing `game.js` a rasterising 2D context, so
+  sprites, shafts, motes and the grade can be judged together. `crop` takes a
+  magnification, the only practical way to look at a 20px sprite, and `hold`
+  presses movement keys so the camera can be walked somewhere worth seeing.
 - `npm test` runs the terrain, editor and game smoke checks. The game smoke
   imports the real `game.js` against a stubbed DOM and runs 240 frames; it is
   the only automatic check that a render change still executes.
