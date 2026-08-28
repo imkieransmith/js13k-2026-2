@@ -430,7 +430,7 @@ const WATER_RIM = [126, 205, 214];
 const GRASS_CONTACT = [46, 88, 46];
 
 // Amplitude per material: ground cover weathers hard, cut stone barely at all.
-const TONE_RANGE = [0, 15, 10, 12, 5];
+const TONE_RANGE = [0, 15, 10, 12, 8];
 
 /**
  * Value noise at three scales, each sampled through a jittered coordinate so
