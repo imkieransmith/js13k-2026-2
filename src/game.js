@@ -59,6 +59,13 @@ const INK = '#1b1a2c';
 const STONE_INK = '#182129';
 const WARNING = '#e0324f';
 const HOT = '#fffdf2';
+// Whatever is animating the rubble. Violet at rest, magenta once roused: it is
+// the only saturated colour anywhere on a Construct, so aggro reads instantly.
+const MAGIC_HOT = '#ffd9f5';
+// The ruins' own stone, lit to shadowed. Constructs are built out of this so
+// one standing in a collapsed temple is plainly made of that temple.
+const STONE = ['#b2bea6', '#96a590', '#687c74', '#3b5453'];
+const TAIL_SEGMENTS = 8;
 
 let screenWidth = 1;
 let screenHeight = 1;
@@ -119,7 +126,7 @@ let dashBuffer = 0;
 let attackBuffer = 0;
 let resetQueued = false;
 let gameTime = 0;
-let hudSignature = '';
+let hudHealth = -1;
 
 const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
 // Dynamic sprites are snapped after the camera transform. Rounding them in
@@ -310,15 +317,12 @@ function moveEnemy(enemy, targetX, targetY, speed, dt) {
   moveOnTerrain(level, enemy, moveX, moveY, 12);
 }
 
+// Health only, and only when it changes. Charge moves continuously while the
+// laser fires, and announcing that would talk over everything else.
 function updateHud() {
-  const health = String(player.health);
-  const laserLevel = String(Math.ceil(laser.charge * 2));
-  const signature = `${health},${laserLevel}`;
-  if (signature === hudSignature) return;
-  hudSignature = signature;
-  hud.dataset.health = health;
-  hud.dataset.laser = laserLevel;
-  hud.setAttribute('aria-label', `Health ${health} of ${PLAYER_MAX_HEALTH}. Rainbow laser ${Number(laserLevel) / 2} seconds.`);
+  if (player.health === hudHealth) return;
+  hudHealth = player.health;
+  hud.textContent = `Health ${hudHealth} of ${PLAYER_MAX_HEALTH}`;
 }
 
 function damagePlayer(sourceX, sourceY) {
@@ -383,7 +387,6 @@ function hitEnemies() {
     attack.hits |= bit;
     hurtEnemy(enemy, attack.directionX * 165, attack.directionY * 165);
     laser.charge = Math.min(LASER_MAX_CHARGE, laser.charge + LASER_HIT_CHARGE);
-    updateHud();
   }
 }
 
@@ -405,7 +408,6 @@ function updateLaser(dt) {
     hurtEnemy(enemy, laser.directionX * 55, laser.directionY * 55);
     enemy.laserCooldown = 0.38;
   }
-  updateHud();
 }
 
 function lockEnemyAim(enemy, dx, dy, distance) {
@@ -561,7 +563,6 @@ function resetEncounter() {
   updateAim();
   aim.previousX = aim.x;
   aim.previousY = aim.y;
-  hudSignature = '';
   updateHud();
 }
 
@@ -781,76 +782,150 @@ function drawDiamond(x, y, radius, step, colour, fromRow = -radius) {
   }
 }
 
+/**
+ * Health as pips over an actor, and nothing at all while it is untouched.
+ * Damage is the only moment the number matters, so a fight nobody has landed a
+ * blow in carries no interface whatsoever.
+ */
+function drawPips(x, y, current, max, colour) {
+  if (current >= max) return;
+  const width = max * 4 - 1;
+  const left = pixelX(x) - (width >> 1);
+  const top = pixelY(y);
+  ctx.fillStyle = INK;
+  ctx.fillRect(left - 1, top - 1, width + 2, 5);
+  for (let pip = 0; pip < max; pip++) {
+    ctx.fillStyle = pip < current ? colour : '#43525a';
+    ctx.fillRect(left + pip * 4, top, 3, 3);
+  }
+}
+
+/**
+ * Dark magic bleeding off a Construct: specks that climb out of the rubble and
+ * fade at the top of the climb. Four fills each, and they do more than any
+ * amount of sprite detail to sell the stone as animated rather than built.
+ */
+function drawMagicMotes(x, y, seed, colour) {
+  ctx.fillStyle = colour;
+  for (let mote = 0; mote < 4; mote++) {
+    const noise = hash(seed, mote, 61);
+    const climb = (noise % 997 / 997 + gameTime * 0.4) % 1;
+    ctx.globalAlpha = Math.sin(climb * Math.PI) * 0.8;
+    ctx.fillRect(
+      pixelX(x - 11 + (noise >>> 9) % 23),
+      pixelY(y + 8 - climb * 24),
+      1, 1 + (mote & 1),
+    );
+  }
+  ctx.globalAlpha = 1;
+}
+
 function drawEnemy(enemy, x, y) {
   x = pixelX(x);
   y = pixelY(y);
-  // The shadow sits on the ground and belongs to no fade, so it is drawn
-  // before the hurt and death alphas are set rather than resetting them.
+  const core = enemy.mode === 1 ? '#ff4ad4' : '#8a4ce0';
+  // The shadow and the motes sit outside the sprite and belong to neither fade,
+  // so both are drawn before the hurt and death alphas rather than resetting
+  // them — an alpha reset here once silently wiped the hurt flash.
   drawShadow(x, y + 12, enemy.type ? 9 : 11);
+  if (enemy.health) drawMagicMotes(x, y, enemy.id, core);
   if (!enemy.health) ctx.globalAlpha = Math.max(0, enemy.death / 0.24);
   else if (enemy.hurt && (enemy.hurt * 24 | 0) & 1) ctx.globalAlpha = 0.35;
-  const alert = enemy.mode === 1;
-  // The core is the tell the player reads during a fight, so it carries the
-  // only saturated colour on the sprite and changes hue on aggro.
-  const core = alert ? '#ff5d8a' : '#4fd6e0';
 
   if (!enemy.type) {
-    // A squat stone walker. The legs are drawn out past the shell and step out
-    // of phase with each other, so the silhouette is never a plain rectangle —
-    // which was most of what made the old chassis read as an appliance.
-    const gait = Math.round(Math.sin(gameTime * 5 + enemy.id) * 1.5);
-    ctx.fillStyle = STONE_INK;
-    for (const side of [-1, 1]) {
-      const lift = side * gait;
-      ctx.fillRect(x + side * 11 - 2, y - 4, 4, 8);
-      ctx.fillRect(x + side * 13 - 2, y + 3 + lift, 4, 6);
-      ctx.fillRect(x + side * 12 - 2, y + 8 + lift, 5, 3);
+    // A cairn of broken masonry that the magic both holds up and holds
+    // together. Each stone is offset from the one under it and the whole upper
+    // stack drifts against the base, so the pile never lines up into a chassis.
+    // A loose heap of masonry with nothing holding it up but what burns in the
+    // gaps. Every stone's size and offset comes from the hash, so each
+    // Construct is a different pile of the same rubble at no cost in level
+    // data — and a hashed heap never resolves into the tidy stack of trays
+    // that hand-placed blocks kept collapsing into however they were shaded.
+    const drift = Math.round(Math.sin(gameTime * 1.9 + enemy.id) * 1.5);
+    const stoneAt = stone => {
+      const spot = hash(enemy.id, stone, 23);
+      // Sizes range wide on purpose — small chips alongside whole blocks —
+      // because stones of one size, roughly centred, read as a stack of slabs
+      // however they are shaded. But the offset stays inside half the smallest
+      // width, so every stone still covers the centre column and the heap
+      // holds together: jitter free enough to break that let the pile come
+      // apart into scattered debris with the sky showing through it.
+      const width = 7 + spot % 7;
+      return [
+        x - (width >> 1) + (spot >>> 8) % 5 - 2,
+        y + 7 - stone * 3 + (stone > 3 ? drift : 0),
+        width, 4 + (spot >>> 4) % 4, spot,
+      ];
+    };
+    // Chips that have come loose and hang in the field regardless. Rubble that
+    // plainly should have fallen and has not says "something is holding this
+    // up" more directly than any amount of shading on the pile itself.
+    for (let chip = 0; chip < 2; chip++) {
+      const spin = gameTime * 0.7 + chip * 3.1 + enemy.id;
+      const chipX = x + Math.round(Math.cos(spin) * 11);
+      const chipY = y - 4 + Math.round(Math.sin(spin) * 7);
+      ctx.fillStyle = STONE_INK;
+      ctx.fillRect(chipX - 2, chipY - 2, 5, 5);
+      ctx.fillStyle = STONE[1];
+      ctx.fillRect(chipX - 1, chipY - 1, 3, 3);
     }
-    ctx.fillStyle = '#5f706c';
-    for (const side of [-1, 1]) ctx.fillRect(x + side * 11 - 1, y - 3, 2, 6);
-    // A broad shouldered hull over a narrower base. Two stacked widths cost one
-    // extra fill and buy a silhouette that steps, which is the whole difference
-    // between a machine crouching on the grass and a box sitting on it.
+    // All the ink before any of the stone, so the heap carries one outline and
+    // the joins between stones show only where their faces fail to meet.
+    // Outlining each stone as it is drawn fences them into separate bricks.
     ctx.fillStyle = STONE_INK;
-    ctx.fillRect(x - 10, y - 14, 20, 11);
-    ctx.fillRect(x - 8, y - 3, 16, 11);
-    // Banded from a lit crown down into ground shadow. The same overhead light
-    // falls on the ruins, so a Construct standing among them sits in the scene
-    // rather than on top of it.
-    ctx.fillStyle = '#d6dcc2';
-    ctx.fillRect(x - 9, y - 13, 18, 2);
-    ctx.fillStyle = '#a3af9c';
-    ctx.fillRect(x - 9, y - 11, 18, 7);
-    ctx.fillStyle = '#6c7c78';
-    ctx.fillRect(x - 7, y - 2, 14, 5);
-    ctx.fillStyle = '#415153';
-    ctx.fillRect(x - 7, y + 3, 14, 4);
-    // A visor recessed across the seam between the two hull widths, which ties
-    // them into one body. The core is the only saturated colour anywhere on the
-    // sprite, so aggro reads instantly however busy the frame gets.
+    for (let stone = 0; stone < 7; stone++) ctx.fillRect(...stoneAt(stone));
+    for (let stone = 0; stone < 7; stone++) {
+      const [stoneX, stoneY, width, height, spot] = stoneAt(stone);
+      // Lit at the top of the heap and sinking into shadow at the ground, the
+      // same light the ruins are lit by, with a hashed bit nudging individual
+      // stones a step darker so neighbours never come out the same tone.
+      ctx.fillStyle = STONE[(stone > 4 ? 0 : stone > 2 ? 1 : 2) + (spot & 1)];
+      ctx.fillRect(stoneX + 1, stoneY + 1, width - 2, height - 2);
+    }
+    // Magic in the joins, on alternate stones only and well off the brightness
+    // of the eye. Lighting every seam frosts the whole heap pink and leaves
+    // the eye nothing to be brighter than.
+    ctx.fillStyle = enemy.mode === 1 ? '#a02a86' : '#4e2a86';
+    for (let stone = 1; stone < 7; stone += 2) {
+      const [stoneX, stoneY, width] = stoneAt(stone);
+      ctx.fillRect(stoneX + 2, stoneY, width - 4, 1);
+    }
+    // Where it pools thickest, sunk into a socket so it burns out of the stone
+    // rather than sitting on it. This is the heap's only concentrated glow, so
+    // it is where the thing reads as looking from — no visor required.
+    const gaze = hash(enemy.id, 9, 5) % 3 - 1;
     ctx.fillStyle = STONE_INK;
-    ctx.fillRect(x - 6, y - 7, 12, 6);
+    ctx.fillRect(x - 3 + gaze, y - 7 + drift, 7, 5);
     ctx.fillStyle = core;
-    ctx.fillRect(x - 5, y - 6, 10, 3);
-    ctx.fillStyle = '#f4feff';
-    ctx.fillRect(x - 2, y - 6, 4, 3);
+    ctx.fillRect(x - 2 + gaze, y - 6 + drift, 5, 3);
+    ctx.fillStyle = MAGIC_HOT;
+    ctx.fillRect(x + gaze, y - 5 + drift, 2, 1);
   } else {
-    // Ranged Constructs float, so they get a hovering prism and a longer bob
-    // than any walker could have; the lens is the muzzle the shot comes from.
+    // Two halves of a shattered keystone floating apart on the magic burning
+    // in the break, which widens and narrows as it hangs. The lens the shot
+    // leaves from is that same break at its hottest point.
     y += Math.round(Math.sin(gameTime * 2.4 + enemy.id) * 2) - 6;
+    // The lower half is drawn offset from the upper, so the keystone reads as
+    // broken clean across and slipped, hanging where the magic in the break
+    // holds it. The slip is what makes it stone; a seam alone made it a lid.
+    const split = 1 + (Math.sin(gameTime * 1.7 + enemy.id) > 0 ? 1 : 0);
+    const slip = Math.round(Math.sin(gameTime * 1.1 + enemy.id) * 1.5);
     drawDiamond(x, y, 13, 1, STONE_INK);
-    drawDiamond(x, y, 12, 1, '#b3bda9');
-    drawDiamond(x, y, 12, 1, '#5f706c', 1);
-    ctx.fillStyle = '#e2e5cd';
-    ctx.fillRect(x - 4, y - 9, 8, 2);
-    ctx.fillStyle = STONE_INK;
-    ctx.fillRect(x - 5, y - 3, 10, 8);
-    drawDiamond(x, y + 1, 4, 1, core);
-    ctx.fillStyle = '#f4feff';
-    ctx.fillRect(x - 1, y, 3, 2);
+    drawDiamond(x, y, 12, 1, STONE[0]);
+    drawDiamond(x + slip, y + split, 13, 1, STONE_INK, 1);
+    drawDiamond(x + slip, y + split, 12, 1, STONE[2], 2);
+    // Kept thin: a bar across the full width reads as a display panel set into
+    // the stone rather than as the stone having come apart.
+    ctx.fillStyle = core;
+    ctx.fillRect(x - 7, y - 1, 14, split + 1);
+    ctx.fillStyle = MAGIC_HOT;
+    ctx.fillRect(x - 2, y - 1, 5, split + 1);
   }
 
   ctx.globalAlpha = 1;
+  if (enemy.health) {
+    drawPips(x, y - (enemy.type ? 19 : 25), enemy.health, enemy.type ? 2 : 3, core);
+  }
 }
 
 function drawProjectiles(alpha) {
@@ -868,6 +943,33 @@ function drawProjectiles(alpha) {
     ctx.fillRect(pixelX(x) - 2, pixelY(y) - 2, 5, 5);
     ctx.fillStyle = HOT;
     ctx.fillRect(pixelX(x) - 1, pixelY(y) - 1, 3, 3);
+  }
+}
+
+/**
+ * The tail is the rainbow meter. It fills from the rump outward as the horn
+ * lands hits and drains back to grey as the laser burns the charge off, which
+ * puts the one resource the player spends on the character they are already
+ * watching instead of in a corner of the screen they are not.
+ */
+function drawTail(x, y, flip) {
+  const filled = Math.ceil(laser.charge / LASER_MAX_CHARGE * TAIL_SEGMENTS);
+  // One silhouette laid down for the whole tail before any segment is filled,
+  // exactly as the body is built. Giving each segment its own outline instead
+  // walls them off from each other and the meter reads as a stack of blocks
+  // parked beside the unicorn rather than as its tail.
+  for (let pass = 0; pass < 2; pass++) {
+    for (let segment = 0; segment < TAIL_SEGMENTS; segment++) {
+      const size = (pass ? 4 : 6) - (segment >> 1);
+      const tailX = x - flip * (10 + (segment >> 1));
+      ctx.fillStyle = pass
+        ? segment < filled ? RAINBOW[segment % 6] : '#8b899e'
+        : INK;
+      ctx.fillRect(
+        tailX - (size >> 1), y - 6 + segment * 2 + pass,
+        size, pass ? 2 : 4,
+      );
+    }
   }
 }
 
@@ -907,10 +1009,10 @@ function drawPlayer(playerX, playerY) {
   // belonging to the scene and starts looking stickered onto it. Every part
   // overlaps its neighbour, so the unicorn reads as one animal rather than as
   // a stack of separate boxes.
+  drawTail(x, y, flip);
   ctx.fillStyle = INK;
   ctx.fillRect(x - 8, y - 6, 16, 19);
   ctx.fillRect(headX - 5, headY - 7, 11, 13);
-  ctx.fillRect(x - flip * 10 - 1, y - 2, 5, 14);
   ctx.fillRect(headX + flip * 2 - 2, headY - 13, 4, 8);
   for (const side of [-7, 3]) ctx.fillRect(x + side, y + 12, 5, 5);
 
@@ -928,17 +1030,19 @@ function drawPlayer(playerX, playerY) {
   ctx.fillStyle = INK;
   ctx.fillRect(headX + flip, headY - 2, 2, 2);
 
-  // The rainbow is the one saturated thing on a pale sprite, so it does the
-  // work an animation frame would: mane down the back of the neck and a tail
-  // at the rump, both inset inside the same outline as the rest of the body.
+  // The mane stays a full rainbow whatever the tail is doing. It is the
+  // unicorn's identity rather than a readout, and leaving it constant gives
+  // the eye something to measure the tail's drained grey against.
   for (let strand = 0; strand < 5; strand++) {
     ctx.fillStyle = RAINBOW[strand];
     ctx.fillRect(headX - flip * 3 - 1, headY - 6 + strand * 2, 3, 2);
-    ctx.fillRect(x - flip * 9 - 1, y - 1 + strand * 2, 3, 2);
   }
   ctx.fillStyle = '#ffe9a8';
   ctx.fillRect(headX + flip * 2 - 1, headY - 12, 2, 6);
+  // Drawn past the invulnerability flicker: the frames just after a hit are
+  // exactly when the player needs to be able to count what is left.
   ctx.globalAlpha = 1;
+  drawPips(x, y - 32, player.health, PLAYER_MAX_HEALTH, '#5ff2dd');
 }
 
 /**

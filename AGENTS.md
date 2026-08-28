@@ -114,3 +114,9 @@ Use BEM for class and ID names. Keep styling clustered together and easy to unde
 Do not apply CSS styling in the JS if it can be avoided. Prefer adding/removing classes, so all styling can be managed in one place.
 
 Prefer UI/HUD elements in the DOM where possible and sensible.
+
+The one deliberate exception is the player readout. There is no HUD panel: health
+is pips drawn over the unicorn and each Construct and hidden while they are
+untouched, and rainbow-laser charge is the unicorn's own tail, filling with
+colour and draining to grey. The DOM keeps only an off-screen live region so a
+screen reader still gets health. Do not reintroduce a corner panel.

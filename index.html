@@ -9,16 +9,9 @@
 <body>
 <main id="game">
   <canvas id="c" tabindex="0" aria-label="Game field. Move with W A S D, aim with the mouse, attack with left click, and dash with Space."></canvas>
-  <div id="hud" class="hud" role="status" aria-label="Health full. Rainbow laser uncharged.">
-    <div class="hud__stat hud__stat--health">
-      <b class="hud__label">HEALTH</b>
-      <span class="hud__track"><i class="hud__fill"></i></span>
-    </div>
-    <div class="hud__stat hud__stat--laser">
-      <b class="hud__label">RAINBOW</b>
-      <span class="hud__track"><i class="hud__fill"></i></span>
-    </div>
-  </div>
+  <!-- Health and charge are read off the unicorn itself. This carries the same
+       state for a screen reader, which cannot see either. -->
+  <b id="hud" class="hud" role="status"></b>
 </main>
 <script type="module" src="/src/game.js"></script>
 </body>
