@@ -7,14 +7,25 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import { registerHooks } from 'node:module';
 import { encodePng } from './png.js';
 
+const options = Object.fromEntries(process.argv.slice(2).map(argument => argument.split('=')));
 registerHooks({
   load(url, context, nextLoad) {
-    if (!url.endsWith('.json')) return nextLoad(url, context);
-    return {
+    if (url.endsWith('.json')) return {
       format: 'module',
       shortCircuit: true,
       source: `export default ${readFileSync(new URL(url), 'utf8')}`,
     };
+    // `dead=id` starts one Construct's real removal timer, making every phase
+    // of a death effect inspectable without a debug branch in the shipped game.
+    if (url.endsWith('/game.js') && options.dead !== undefined) return {
+      format: 'module',
+      shortCircuit: true,
+      source: readFileSync(new URL(url), 'utf8').replace(
+        'let enemies = makeEnemies();',
+        `let enemies = makeEnemies(); enemies[${Number(options.dead)}].health = 0; enemies[${Number(options.dead)}].death = CONSTRUCT_DEATH;`,
+      ),
+    };
+    return nextLoad(url, context);
   },
 });
 
@@ -165,7 +176,6 @@ globalThis.atob = value => Buffer.from(value, 'base64').toString('binary');
 
 await import('../src/game.js');
 
-const options = Object.fromEntries(process.argv.slice(2).map(argument => argument.split('=')));
 const outPath = options.out || 'dist/frame.png';
 const cropArgs = options.crop;
 for (const code of (options.hold || '').split(',').filter(Boolean)) {

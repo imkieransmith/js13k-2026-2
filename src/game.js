@@ -33,6 +33,7 @@ const MELEE_WINDUP = 0.45;
 const RANGED_WINDUP = 0.62;
 const ENEMY_ATTACK_EFFECT = 0.16;
 const ENEMY_HURT_FLASH = 0.45;
+const CONSTRUCT_DEATH = 0.92;
 const ENEMY_ATTACK_REACH = 52;
 const ENEMY_ATTACK_ARC = Math.PI * 0.58;
 const ENEMY_AGGRO = 210;
@@ -353,7 +354,7 @@ function hurtEnemy(enemy, knockX, knockY) {
   enemy.knockX = knockX;
   enemy.knockY = knockY;
   if (!enemy.health) {
-    enemy.death = 0.24;
+    enemy.death = CONSTRUCT_DEATH;
     enemy.windup = enemy.attackEffect = 0;
     return;
   }
@@ -609,8 +610,8 @@ function visibleBounds(cameraX, cameraY) {
 // out dense under the body and thin at its rim without a gradient — a flat
 // rectangle under a character reads as a hole cut in the floor, and it stays
 // translucent so the same shadow works over grass, stone and water alike.
-function drawShadow(x, y, radius) {
-  ctx.globalAlpha = 0.22;
+function drawShadow(x, y, radius, alpha = 0.22) {
+  ctx.globalAlpha = alpha;
   ctx.fillStyle = '#0b171c';
   ctx.fillRect(x - radius, y - 1, radius * 2, 3);
   ctx.fillRect(x - radius + 2, y - 2, radius * 2 - 4, 5);
@@ -788,21 +789,58 @@ function drawPips(x, y, current, max, colour) {
 }
 
 /**
- * Dark magic bleeding off a Construct: specks that climb out of the rubble and
- * fade at the top of the climb. Four fills each, and they do more than any
- * amount of sprite detail to sell the stone as animated rather than built.
+ * Dark magic leaks through the carving as small backed sparks. The dark two-
+ * pixel flecks stay readable over pale Floor while their violet cores connect
+ * them to the eye; uneven climb speeds stop the halo moving as one sheet.
  */
 function drawMagicMotes(x, y, seed, colour) {
-  ctx.fillStyle = colour;
-  for (let mote = 0; mote < 4; mote++) {
+  for (let mote = 0; mote < 6; mote++) {
     const noise = hash(seed, mote, 61);
-    const climb = (noise % 997 / 997 + gameTime * 0.4) % 1;
-    ctx.globalAlpha = Math.sin(climb * Math.PI) * 0.8;
-    ctx.fillRect(
-      pixelX(x - 11 + (noise >>> 9) % 23),
-      pixelY(y + 8 - climb * 24),
-      1, 1 + (mote & 1),
-    );
+    const climb = (noise % 997 / 997 + gameTime * (0.32 + (mote & 1) * 0.08)) % 1;
+    const moteX = pixelX(x - 20 + (noise >>> 9) % 41 + Math.sin(gameTime * 2 + mote) * 2);
+    const moteY = pixelY(y + 10 - climb * 29);
+    const alpha = Math.sin(climb * Math.PI);
+    ctx.globalAlpha = alpha * 0.55;
+    ctx.fillStyle = '#281936';
+    ctx.fillRect(moteX - 1, moteY, 2, 2 + (mote & 1));
+    ctx.globalAlpha = alpha;
+    ctx.fillStyle = colour;
+    ctx.fillRect(moteX, moteY, 1, 1 + (mote & 1));
+  }
+  ctx.globalAlpha = 1;
+}
+
+/**
+ * No particle state is needed for the death poof: stable hashes give each
+ * Construct its own expanding smoke lobes and ballistic stone chips, while the
+ * death timer supplies their position and fade.
+ */
+function drawEnemyDeath(enemy, x, y) {
+  const progress = 1 - enemy.death / CONSTRUCT_DEATH;
+  ctx.globalAlpha = Math.sin(progress * Math.PI) * 0.82;
+  for (let puff = 0; puff < 9; puff++) {
+    const noise = hash(enemy.id, puff, 89);
+    const angle = noise % 628 / 100;
+    const distance = 4 + progress * (14 + (noise >>> 8) % 17);
+    const size = 3 + (progress * 5 | 0);
+    const width = 2 + (size >> 2);
+    const puffX = Math.round(x + Math.cos(angle) * distance * 0.55);
+    const puffY = Math.round(y - 4 + Math.sin(angle) * distance * 0.45 - progress * 27);
+    ctx.fillStyle = puff & 1 ? '#4e2a86' : '#281936';
+    ctx.fillRect(puffX - (width >> 1), puffY - (size >> 1), width, size);
+    ctx.fillRect(puffX - (width >> 1) + (puff & 1 ? 1 : -1), puffY + 1, width, Math.max(2, size - 3));
+  }
+
+  ctx.globalAlpha = Math.min(1, (1 - progress) * 1.8);
+  for (let chip = 0; chip < 16; chip++) {
+    const noise = hash(enemy.id, chip, 131);
+    const size = 3 + (noise >>> 16 & 3);
+    const chipX = Math.round(x + (noise % 35 - 17) * progress * 2.6);
+    const chipY = Math.round(y - 5 - (14 + (noise >>> 8) % 24) * progress + 48 * progress * progress);
+    ctx.fillStyle = STONE_INK;
+    ctx.fillRect(chipX - 1, chipY - 1, size + 2, size + 2);
+    ctx.fillStyle = STONE[(noise >>> 18) % 3];
+    ctx.fillRect(chipX, chipY, size, size);
   }
   ctx.globalAlpha = 1;
 }
@@ -811,10 +849,10 @@ function drawEnemy(enemy, x, y) {
   x = pixelX(x);
   y = pixelY(y);
   const core = enemy.mode === 1 ? '#ff4ad4' : '#8a4ce0';
-  // Atmosphere remains visible while the body flashes or dies.
-  drawShadow(x, y + 12, enemy.type ? 13 : 16);
-  if (enemy.health) drawMagicMotes(x, y, enemy.id, core);
-  if (!enemy.health) ctx.globalAlpha = Math.max(0, enemy.death / 0.24);
+  // The shadow drains with the death smoke instead of vanishing one frame
+  // after it; living atmosphere remains visible while the body hurt-flashes.
+  drawShadow(x, y + 12, enemy.type ? 13 : 16, enemy.health ? 0.22 : 0.22 * enemy.death / CONSTRUCT_DEATH);
+  if (!enemy.health) ctx.globalAlpha = clamp(enemy.death / CONSTRUCT_DEATH * 4 - 3, 0, 1);
   else if (enemy.hurt && (enemy.hurt * 24 | 0) & 1) ctx.globalAlpha = 0.35;
 
   if (!enemy.type) {
@@ -895,7 +933,12 @@ function drawEnemy(enemy, x, y) {
   }
 
   ctx.globalAlpha = 1;
-  if (enemy.health) drawPips(x, y - 23, enemy.health, enemy.type ? 2 : 3, core);
+  if (enemy.health) {
+    // Front motes remain visible against both pale Floor and the broad shell;
+    // a few crossing the carving make the magic feel internal rather than fog.
+    drawMagicMotes(x, y, enemy.id, core);
+    drawPips(x, y - 23, enemy.health, enemy.type ? 2 : 3, core);
+  } else drawEnemyDeath(enemy, x, y);
 }
 
 function drawProjectiles(alpha) {
