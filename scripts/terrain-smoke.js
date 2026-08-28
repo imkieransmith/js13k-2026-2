@@ -184,9 +184,9 @@ buildTerrain(visual, 1, canvas);
 const firstPixels = canvas.pixels();
 assert.ok(firstPixels.every((value, index) => index % 4 !== 3 || value === 255), 'Terrain cache contains transparent gaps');
 const pixelAt = (pixels, x, y) => [...pixels.slice((y * visual.width + x) * 4, (y * visual.width + x) * 4 + 3)];
-// Structural stone is flat, so it is asserted against the palette by name;
-// ground materials now carry tonal noise, so those are asserted as a shade of
-// the material within the noise band rather than as one exact value.
+// Structural bevel samples are asserted against their named palette steps;
+// broad stone and ground materials carry tonal noise, so their interiors are
+// checked as a nearby shade rather than as one exact value.
 const shade = (colour, lift) => colour.map((value, index) => value + lift * [1, 1.15, 0.7][index]);
 const near = (actual, expected, message, tolerance = 12) => assert.ok(
   actual.every((value, index) => Math.abs(value - expected[index]) <= tolerance),
@@ -195,14 +195,24 @@ const near = (actual, expected, message, tolerance = 12) => assert.ok(
 const luma = colour => colour[0] * 0.3 + colour[1] * 0.6 + colour[2] * 0.1;
 
 near(pixelAt(firstPixels, 5 * 32 + 16, 16), STONE.crown, 'Joined Wall row did not render as a lit crown', 8);
-assert.deepEqual(pixelAt(firstPixels, 5 * 32 + 16, 1), STONE.lip, 'Wall mass is missing its back perimeter lip');
+assert.deepEqual(pixelAt(firstPixels, 5 * 32 + 8, 1), STONE.lip, 'Wall mass is missing its back perimeter highlight');
+assert.deepEqual(pixelAt(firstPixels, 5 * 32 + 13, 1), STONE.crown, 'Wall perimeter is missing its deterministic worn nick');
+assert.deepEqual(pixelAt(firstPixels, 5 * 32 + 8, 0), STONE.side, 'Wall perimeter is missing its outer bevel tone');
 near(pixelAt(firstPixels, 5 * 32 + 16, 33), STONE.crown, 'Middle Wall row emitted a repeated lip', 8);
-assert.deepEqual(pixelAt(firstPixels, 5 * 32 + 16, 2 * 32 + 30), STONE.lip, 'Exposed southern Wall row is missing the lip along its crown edge');
+assert.deepEqual(pixelAt(firstPixels, 5 * 32 + 16, 2 * 32 + 29), STONE.side, 'Exposed Wall crown is missing its bevel approach');
+assert.deepEqual(pixelAt(firstPixels, 5 * 32 + 16, 2 * 32 + 30), STONE.lip, 'Exposed Wall crown is missing its highlight');
+assert.deepEqual(pixelAt(firstPixels, 5 * 32 + 16, 2 * 32 + 31), STONE.face, 'Exposed Wall crown is missing its shaded bevel edge');
 assert.deepEqual(pixelAt(firstPixels, 5 * 32 + 1, 16), STONE.side, 'Wall run is missing its exposed side return');
 near(pixelAt(firstPixels, 1 * 32 + 16, 2 * 32 + 16), shade(RGB[1], RAISED_LIFT), 'Elevated Grass did not receive the height grade');
 assert.deepEqual(pixelAt(firstPixels, 1 * 32 + 16, 2 * 32), STONE.lip, 'Elevated Grass merged with Ground across its north edge');
+assert.deepEqual(pixelAt(firstPixels, 1 * 32 + 16, 2 * 32 + 1), STONE.side, 'Elevated north edge is missing its second bevel tone');
 assert.deepEqual(pixelAt(firstPixels, 1 * 32, 2 * 32 + 16), STONE.side, 'Elevated Grass merged with Ground across its side edge');
+assert.deepEqual(pixelAt(firstPixels, 1 * 32 + 1, 2 * 32 + 16), STONE.lip, 'Elevated side edge is missing its highlight');
+assert.deepEqual(pixelAt(firstPixels, 1 * 32 + 16, 2 * 32 + 29), STONE.side, 'Elevated south edge is missing its bevel approach');
 assert.deepEqual(pixelAt(firstPixels, 1 * 32 + 16, 2 * 32 + 30), STONE.lip, 'Elevated Grass hid the structural edge');
+assert.deepEqual(pixelAt(firstPixels, 1 * 32 + 16, 2 * 32 + 31), STONE.face, 'Elevated south edge is missing its shaded bevel edge');
+assert.deepEqual(pixelAt(firstPixels, 1 * 32 + 16, 3 * 32), STONE.mass, 'Elevated south edge is missing its structural return');
+assert.deepEqual(pixelAt(firstPixels, 1 * 32 + 16, 3 * 32 + 2), STONE.base, 'Elevated south edge is missing its baseline');
 near(pixelAt(firstPixels, 1 * 32 + 16, 3 * 32 + 16), STONE.face, 'Elevated Grass covered the lower Wall face', 8);
 near(pixelAt(firstPixels, 2 * 32 + 16, 2 * 32 + 16), shade(RGB[4], RAISED_LIFT), 'Elevated Floor did not receive the height grade');
 near(pixelAt(firstPixels, 2 * 32 + 16, 1 * 32 + 16), shade(RGB[3], RAISED_LIFT), 'Elevated Water did not receive the height grade');

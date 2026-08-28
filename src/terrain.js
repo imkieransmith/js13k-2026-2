@@ -373,20 +373,19 @@ const NUMBER = { g: 1, d: 2, w: 3, f: 4, b: 5, s: 6 };
 export const RAISED_LIFT = 13;
 
 /**
- * Cut stone reads as a single carved mass lit from the north: a blown-out top
- * lip, a face a full step down, and a body that falls almost to the void. The
- * wide gap between lip and body is what gives the ruins their weight, so these
- * are named rather than inlined and the smoke test asserts against the names.
+ * Cut stone follows the floor's warm limestone axis, shifted greener and much
+ * darker down the wall so tiers remain distinct. A pale lip, mid face and body
+ * near the void give the ruins weight; named values keep every bevel coherent.
  */
 export const STONE = {
-  lip: [238, 236, 208],
-  side: [178, 190, 166],
-  crown: [150, 165, 144],
-  face: [104, 124, 116],
-  mass: [59, 84, 83],
-  base: [26, 46, 49],
-  tread: [188, 197, 173],
-  riser: [101, 124, 118],
+  lip: [238, 233, 205],
+  side: [198, 199, 174],
+  crown: [174, 179, 157],
+  face: [121, 132, 120],
+  mass: [65, 81, 79],
+  base: [29, 45, 47],
+  tread: [198, 198, 173],
+  riser: [119, 130, 117],
 };
 
 /**
@@ -723,8 +722,8 @@ function drawWalls(image, level, walls, stairs) {
     fillStone(image, level, worldX, worldY, AUTHOR_TILE, 32, STONE.crown);
     // Chips keep a crown spanning many tiles from reading as one flat shape.
     const wear = terrainHash(x, y, level.seed + 77);
+    const chipX = worldX + wear % 22 + 4;
     if (wear % 3) {
-      const chipX = worldX + wear % 22 + 4;
       const chipY = worldY + (wear >>> 6) % 22 + 4;
       fillRect(image, chipX, chipY, 3 + (wear >>> 12 & 3), 1, STONE.face);
       fillRect(image, chipX + 1, chipY + 1, 2, 1, STONE.side);
@@ -734,15 +733,30 @@ function drawWalls(image, level, walls, stairs) {
       // below: lit under the crown, falling into shadow at the ground line.
       fillStone(image, level, worldX, worldY + 32, AUTHOR_TILE, 20, STONE.face);
       fillStone(image, level, worldX, worldY + 52, AUTHOR_TILE, 11, STONE.mass);
-      fillRect(image, worldX, worldY + 29, AUTHOR_TILE, 3, STONE.lip);
+      // Three tones retain the old readable thickness without one chunky band.
+      fillRect(image, worldX, worldY + 29, AUTHOR_TILE, 1, STONE.side);
+      fillRect(image, worldX, worldY + 30, AUTHOR_TILE, 1, STONE.lip);
+      fillRect(image, worldX, worldY + 31, AUTHOR_TILE, 1, STONE.face);
+      if (wear & 2) fillRect(image, chipX, worldY + 30, 3 + (wear >>> 10 & 3), 1, STONE.crown);
       fillRect(image, worldX, worldY + 63, AUTHOR_TILE, 2, STONE.base);
     }
-    // The back edge completes the raised perimeter; facade and side edges
-    // below join it through convex and concave corners.
-    if (!wallAt(x, y - 1)) fillRect(image, worldX, worldY, AUTHOR_TILE, 3, STONE.lip);
+    // Directional two-tone bevels join at corners. Tiny nicks interrupt the
+    // ruler-straight highlight but never break the darker structural return.
+    if (!wallAt(x, y - 1)) {
+      fillRect(image, worldX, worldY, AUTHOR_TILE, 1, STONE.side);
+      fillRect(image, worldX, worldY + 1, AUTHOR_TILE, 1, STONE.lip);
+      fillRect(image, worldX, worldY + 2, AUTHOR_TILE, 1, STONE.crown);
+      if (wear & 4) fillRect(image, chipX, worldY + 1, 2 + (wear >>> 11 & 3), 1, STONE.crown);
+    }
     const height = facade ? 63 : 32;
-    if (!wallAt(x - 1, y)) fillRect(image, worldX, worldY, 3, height, STONE.side);
-    if (!wallAt(x + 1, y)) fillRect(image, worldX + AUTHOR_TILE - 3, worldY, 3, height, STONE.side);
+    if (!wallAt(x - 1, y)) {
+      fillRect(image, worldX, worldY, 1, height, STONE.lip);
+      fillRect(image, worldX + 1, worldY, 2, height, STONE.side);
+    }
+    if (!wallAt(x + 1, y)) {
+      fillRect(image, worldX + AUTHOR_TILE - 3, worldY, 2, height, STONE.side);
+      fillRect(image, worldX + AUTHOR_TILE - 1, worldY, 1, height, STONE.face);
+    }
   }
 }
 
@@ -751,15 +765,34 @@ function drawUpperEdges(image, level, support) {
     if (!supportAt(level, support, x, y)) continue;
     const worldX = x * AUTHOR_TILE;
     const worldY = y * AUTHOR_TILE;
-    if (!supportAt(level, support, x, y - 1)) fillRect(image, worldX, worldY, AUTHOR_TILE, 2, STONE.lip);
-    if (!supportAt(level, support, x, y + 1)) {
-      fillRect(image, worldX, worldY + AUTHOR_TILE - 3, AUTHOR_TILE, 3, STONE.lip);
-      fillRect(image, worldX, worldY + AUTHOR_TILE, AUTHOR_TILE, 3, STONE.mass);
+    const wear = terrainHash(x, y, level.seed + 151);
+    const chip = 4 + wear % 22;
+    const chipSize = 2 + (wear >>> 8 & 3);
+    if (!supportAt(level, support, x, y - 1)) {
+      fillRect(image, worldX, worldY, AUTHOR_TILE, 1, STONE.lip);
+      fillRect(image, worldX, worldY + 1, AUTHOR_TILE, 1, STONE.side);
+      if (wear & 1) fillRect(image, worldX + chip, worldY, chipSize, 1, STONE.side);
     }
-    // Full-height returns join across tile corners, so identical upper/lower
-    // materials can never visually bleed through a dashed structural edge.
-    if (!supportAt(level, support, x - 1, y)) fillRect(image, worldX, worldY, 2, AUTHOR_TILE, STONE.side);
-    if (!supportAt(level, support, x + 1, y)) fillRect(image, worldX + AUTHOR_TILE - 2, worldY, 2, AUTHOR_TILE, STONE.side);
+    if (!supportAt(level, support, x, y + 1)) {
+      fillRect(image, worldX, worldY + AUTHOR_TILE - 3, AUTHOR_TILE, 1, STONE.side);
+      fillRect(image, worldX, worldY + AUTHOR_TILE - 2, AUTHOR_TILE, 1, STONE.lip);
+      fillRect(image, worldX, worldY + AUTHOR_TILE - 1, AUTHOR_TILE, 1, STONE.face);
+      fillRect(image, worldX, worldY + AUTHOR_TILE, AUTHOR_TILE, 2, STONE.mass);
+      fillRect(image, worldX, worldY + AUTHOR_TILE + 2, AUTHOR_TILE, 1, STONE.base);
+      if (wear & 2) fillRect(image, worldX + chip, worldY + AUTHOR_TILE - 2, chipSize, 1, STONE.face);
+    }
+    // Light and shadow split each full-height return rather than widening one
+    // flat colour. The edge remains continuous over identical materials.
+    if (!supportAt(level, support, x - 1, y)) {
+      fillRect(image, worldX, worldY, 1, AUTHOR_TILE, STONE.side);
+      fillRect(image, worldX + 1, worldY, 1, AUTHOR_TILE, STONE.lip);
+      if (wear & 4) fillRect(image, worldX + 1, worldY + chip, 1, chipSize, STONE.face);
+    }
+    if (!supportAt(level, support, x + 1, y)) {
+      fillRect(image, worldX + AUTHOR_TILE - 2, worldY, 1, AUTHOR_TILE, STONE.side);
+      fillRect(image, worldX + AUTHOR_TILE - 1, worldY, 1, AUTHOR_TILE, STONE.face);
+      if (wear & 8) fillRect(image, worldX + AUTHOR_TILE - 2, worldY + chip, 1, chipSize, STONE.mass);
+    }
   }
 }
 
@@ -778,8 +811,16 @@ function drawStairs(image, level, stairs, walls) {
       fillRect(image, worldX, worldY + step, AUTHOR_TILE, 1, STONE.lip);
       fillRect(image, worldX, worldY + step + 6, AUTHOR_TILE, 2, STONE.riser);
     }
-    if (!at(stairs, x - 1, y) && !at(walls, x - 1, y)) fillRect(image, worldX, worldY, 4, 64, STONE.lip);
-    if (!at(stairs, x + 1, y) && !at(walls, x + 1, y)) fillRect(image, worldX + AUTHOR_TILE - 4, worldY, 4, 64, STONE.mass);
+    if (!at(stairs, x - 1, y) && !at(walls, x - 1, y)) {
+      fillRect(image, worldX, worldY, 1, 64, STONE.side);
+      fillRect(image, worldX + 1, worldY, 1, 64, STONE.lip);
+      fillRect(image, worldX + 2, worldY, 2, 64, STONE.side);
+    }
+    if (!at(stairs, x + 1, y) && !at(walls, x + 1, y)) {
+      fillRect(image, worldX + AUTHOR_TILE - 4, worldY, 1, 64, STONE.side);
+      fillRect(image, worldX + AUTHOR_TILE - 3, worldY, 1, 64, STONE.face);
+      fillRect(image, worldX + AUTHOR_TILE - 2, worldY, 2, 64, STONE.mass);
+    }
     if (!at(stairs, x, y + 2)) fillRect(image, worldX, worldY + 62, AUTHOR_TILE, 2, STONE.base);
   }
 }
