@@ -2,24 +2,41 @@
 html,body,#game{width:100%;height:100%;margin:0;overflow:hidden;background:#0b161b}
 #game{height:100dvh;position:relative}
 #c{display:block;width:100%;height:100%;outline:0;touch-action:none;image-rendering:pixelated;cursor:crosshair}
-.hud{position:absolute;left:18px;top:18px;display:grid;gap:9px;width:132px;padding:11px 13px;background:#18233ddd;box-shadow:0 3px 0 #0d1729;color:#fff3a6;font:700 9px/1 system-ui,sans-serif;letter-spacing:.1em;pointer-events:none}
-.hud__stat{display:grid;grid-template-columns:48px 1fr;align-items:center;gap:7px}
-.hud__track{display:block;height:7px;padding:2px;background:#342d4b}
-.hud__fill{display:block;width:100%;height:100%;background:#f16b9a}
-.hud[data-health="4"] .hud__stat--health .hud__fill{width:80%}
-.hud[data-health="3"] .hud__stat--health .hud__fill{width:60%}
-.hud[data-health="2"] .hud__stat--health .hud__fill{width:40%}
-.hud[data-health="1"] .hud__stat--health .hud__fill{width:20%}
-.hud[data-health="0"] .hud__stat--health .hud__fill{width:0}
-.hud__stat--laser .hud__track{background:#3a4864}
-.hud__stat--laser .hud__fill{width:0;background:linear-gradient(90deg,#f16b9a,#ffc55c,#fff3a6,#68d48b,#62b8ed,#9c78df)}
-.hud[data-laser="1"] .hud__stat--laser .hud__fill{width:10%}
-.hud[data-laser="2"] .hud__stat--laser .hud__fill{width:20%}
-.hud[data-laser="3"] .hud__stat--laser .hud__fill{width:30%}
-.hud[data-laser="4"] .hud__stat--laser .hud__fill{width:40%}
-.hud[data-laser="5"] .hud__stat--laser .hud__fill{width:50%}
-.hud[data-laser="6"] .hud__stat--laser .hud__fill{width:60%}
-.hud[data-laser="7"] .hud__stat--laser .hud__fill{width:70%}
-.hud[data-laser="8"] .hud__stat--laser .hud__fill{width:80%}
-.hud[data-laser="9"] .hud__stat--laser .hud__fill{width:90%}
-.hud[data-laser="10"] .hud__stat--laser .hud__fill{width:100%}
+
+/* Wordless, icon-and-pip readout. Discrete cells report an exact resource at a
+   glance where a continuous bar only reports "some", and dropping the labels
+   keeps the frame's only text out of a pixel-art scene. */
+.hud{position:absolute;left:18px;top:18px;display:grid;gap:6px;padding:9px 10px;background:#0d1b20e6;border-top:1px solid #2e4a50;box-shadow:0 3px 0 #060f13;pointer-events:none}
+.hud__stat{display:grid;grid-template-columns:9px 58px;align-items:center;gap:8px}
+.hud__stat::before{content:"";display:block;height:9px}
+.hud__label{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%)}
+.hud__track{display:block;height:8px}
+.hud__fill{display:block;height:100%;width:0}
+
+/* Health reads as five wide cells; the rainbow charge as ten fine ones. Both
+   the empty track and the fill are the same repeating cell pattern, so a fill
+   width always lands on a cell boundary rather than clipping one in half. */
+.hud__stat--health::before{background:#f16b9a}
+.hud__stat--health .hud__track{background:repeating-linear-gradient(90deg,#2b3f45 0 9px,transparent 9px 12px)}
+.hud__stat--health .hud__fill{background:repeating-linear-gradient(90deg,#f16b9a 0 9px,transparent 9px 12px)}
+.hud[data-health="1"] .hud__stat--health .hud__fill{width:9px}
+.hud[data-health="2"] .hud__stat--health .hud__fill{width:21px}
+.hud[data-health="3"] .hud__stat--health .hud__fill{width:33px}
+.hud[data-health="4"] .hud__stat--health .hud__fill{width:45px}
+.hud[data-health="5"] .hud__stat--health .hud__fill{width:57px}
+
+.hud__stat--laser::before{background:linear-gradient(135deg,#f16b9a,#ffc55c,#68d48b,#62b8ed,#9c78df)}
+.hud__stat--laser .hud__track{background:repeating-linear-gradient(90deg,#2b3f45 0 4px,transparent 4px 6px)}
+/* The rainbow is sized to the whole track, not to the fill, so each cell keeps
+   its own colour as the charge grows instead of resqueezing the spectrum. */
+.hud__stat--laser .hud__fill{background:linear-gradient(90deg,#f16b9a,#ffc55c,#fff3a6,#68d48b,#62b8ed,#9c78df);background-size:58px 100%;mask:repeating-linear-gradient(90deg,#000 0 4px,transparent 4px 6px)}
+.hud[data-laser="1"] .hud__stat--laser .hud__fill{width:4px}
+.hud[data-laser="2"] .hud__stat--laser .hud__fill{width:10px}
+.hud[data-laser="3"] .hud__stat--laser .hud__fill{width:16px}
+.hud[data-laser="4"] .hud__stat--laser .hud__fill{width:22px}
+.hud[data-laser="5"] .hud__stat--laser .hud__fill{width:28px}
+.hud[data-laser="6"] .hud__stat--laser .hud__fill{width:34px}
+.hud[data-laser="7"] .hud__stat--laser .hud__fill{width:40px}
+.hud[data-laser="8"] .hud__stat--laser .hud__fill{width:46px}
+.hud[data-laser="9"] .hud__stat--laser .hud__fill{width:52px}
+.hud[data-laser="10"] .hud__stat--laser .hud__fill{width:58px}

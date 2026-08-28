@@ -381,7 +381,8 @@ export const RAISED_LIFT = 13;
 export const STONE = {
   lip: [238, 236, 208],
   side: [178, 190, 166],
-  face: [120, 139, 127],
+  crown: [150, 165, 144],
+  face: [104, 124, 116],
   mass: [59, 84, 83],
   base: [26, 46, 49],
   tread: [188, 197, 173],
@@ -429,7 +430,7 @@ const WATER_RIM = [126, 205, 214];
 const GRASS_CONTACT = [46, 88, 46];
 
 // Amplitude per material: ground cover weathers hard, cut stone barely at all.
-const TONE_RANGE = [0, 10, 8, 11, 5];
+const TONE_RANGE = [0, 15, 10, 12, 5];
 
 /**
  * Value noise at three scales, each sampled through a jittered coordinate so
@@ -446,9 +447,13 @@ function octave(x, y, shift, seed) {
   // Displacement is sampled at an eighth of the cell and swings up to half of
   // it, so every octave's grid dissolves at its own scale. A fixed jitter only
   // ever hides the finest one and leaves the wider ones showing as squares.
+  // The displacement has to stay well under the cell, or neighbouring drift
+  // blocks land in unrelated cells and the region breaks into squares at the
+  // drift scale instead of gaining a ragged border. An eighth-cell block
+  // displaced by up to a quarter cell is the balance that reads as organic.
   const cell = 1 << shift;
-  const swing = cell * 3 >> 2;
-  const drift = terrainHash(x >> shift - 2, y >> shift - 2, seed);
+  const swing = cell >> 1;
+  const drift = terrainHash(x >> shift - 3, y >> shift - 3, seed);
   return terrainHash(
     x + drift % swing - (swing >> 1) >> shift,
     y + (drift >>> 9) % swing - (swing >> 1) >> shift,
@@ -461,9 +466,24 @@ function tone(x, y, code, seed) {
   // the landscape is what a large field needs, not surface fizz. Amplitude
   // stays low because quantised cells read as rectangles as soon as the
   // contrast is high enough to notice - the drama belongs to the lighting.
-  const region = octave(x, y, 7, seed + 3);
-  const broad = octave(x, y, 5, seed + code);
-  return (region * 2 + broad) * TONE_RANGE[code] / 3;
+  // Two wide grids offset by half a cell, summed. A single grid of quantised
+  // cells always reads as a grid however far its borders are displaced; two
+  // whose borders rarely coincide produce intermediate steps between regions,
+  // which is what reads as light falling across a landscape.
+  const region = octave(x, y, 8, seed + 3) + octave(x + 128, y + 128, 8, seed + 37);
+  const broad = octave(x, y, 6, seed + code);
+  return (region * 2 + broad) * TONE_RANGE[code] / 5;
+}
+
+/** Cut stone weathers too, and a crown spanning many tiles is far too large a
+ * surface to leave as one dead fill. Borrows the Floor tone band, which is the
+ * shallowest, so the stone stays obviously cut rather than looking overgrown. */
+function fillStone(image, level, x, y, width, height, colour) {
+  for (let py = Math.max(0, y); py < Math.min(image.height, y + height); py++) {
+    for (let px = Math.max(0, x); px < Math.min(image.width, x + width); px++) {
+      setPixel(image, px, py, colour, tone(px, py, 4, level.seed));
+    }
+  }
 }
 
 function prepareLayers(level) {
@@ -502,6 +522,19 @@ function drawFloorDetails(image, level, slots, slot, tileX, tileY, lift) {
   fillRect(image, x, y + 3, 1, AUTHOR_TILE - 6, [150, 149, 132], lift);
   fillRect(image, x + 3, y + 1, AUTHOR_TILE - 6, 1, [219, 216, 191], lift);
   fillRect(image, x + 1, y + 3, 1, AUTHOR_TILE - 6, [219, 216, 191], lift);
+
+  // A carved medallion on the occasional slab. The reference plazas are never
+  // an unbroken grid: a sparse repeated motif is what makes cut stone read as
+  // built by someone rather than tiled by a renderer.
+  if (terrainHash(tileX, tileY, level.seed + 211) % 11) return;
+  for (const inset of [6, 11]) {
+    const size = AUTHOR_TILE - inset * 2;
+    fillRect(image, x + inset, y + inset, size, 1, [165, 163, 145], lift);
+    fillRect(image, x + inset, y + inset + size, size, 1, [165, 163, 145], lift);
+    fillRect(image, x + inset, y + inset, 1, size, [165, 163, 145], lift);
+    fillRect(image, x + inset + size, y + inset, 1, size + 1, [165, 163, 145], lift);
+  }
+  fillRect(image, x + 15, y + 15, 3, 3, [165, 163, 145], lift);
 }
 
 /**
@@ -680,11 +713,23 @@ function drawWalls(image, level, walls, stairs) {
     // Stairs directly south continue the raised mass instead of exposing a
     // second Wall facade behind the staircase and pushing the platform back.
     const facade = !wallAt(x, y + 1) && !at(stairs, x, y + 1);
-    fillRect(image, worldX, worldY, AUTHOR_TILE, 32, STONE.mass);
+    // The mass is seen from above, so its own tile is a sunlit crown. Rendering
+    // it darker than the surrounding field made a solid block read as a hole.
+    fillStone(image, level, worldX, worldY, AUTHOR_TILE, 32, STONE.crown);
+    // Chips keep a crown spanning many tiles from reading as one flat shape.
+    const wear = terrainHash(x, y, level.seed + 77);
+    if (wear % 3) {
+      const chipX = worldX + wear % 22 + 4;
+      const chipY = worldY + (wear >>> 6) % 22 + 4;
+      fillRect(image, chipX, chipY, 3 + (wear >>> 12 & 3), 1, STONE.face);
+      fillRect(image, chipX + 1, chipY + 1, 2, 1, STONE.side);
+    }
     if (facade) {
-      fillRect(image, worldX, worldY, AUTHOR_TILE, 32, STONE.face);
-      fillRect(image, worldX, worldY + 32, AUTHOR_TILE, 31, STONE.mass);
-      fillRect(image, worldX, worldY, AUTHOR_TILE, 3, STONE.lip);
+      // Only the exposed southern row projects a front face onto the tile
+      // below: lit under the crown, falling into shadow at the ground line.
+      fillStone(image, level, worldX, worldY + 32, AUTHOR_TILE, 20, STONE.face);
+      fillStone(image, level, worldX, worldY + 52, AUTHOR_TILE, 11, STONE.mass);
+      fillRect(image, worldX, worldY + 29, AUTHOR_TILE, 3, STONE.lip);
       fillRect(image, worldX, worldY + 63, AUTHOR_TILE, 2, STONE.base);
     }
     // The back edge completes the raised perimeter; facade and side edges

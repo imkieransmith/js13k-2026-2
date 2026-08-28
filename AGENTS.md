@@ -81,6 +81,21 @@ You may still submit a PR to fix critical issues that prevent your game from bei
 - The player-unicorn fights Constructs; ancient stone/prismatic machines that still defend parts of the landscape. Imagine floating cubes or walker/crab/turtle style cubes. Great excuse for simple geometric sprites and very readable attack patterns.
 
 
+## Development tooling
+There is no browser in this toolchain, so two dev-only scripts stand in for one:
+
+- `npm run preview:art -- <out.png> [x,y,w,h]` bakes the real terrain headless and
+  writes a PNG. With a crop it also applies a stand-in for the runtime light
+  shafts and colour grade, so a crop previews roughly what the player sees.
+  Those numbers are duplicated from `game.js` and must be kept in step by hand.
+- `npm test` runs the terrain, editor and game smoke checks. The game smoke
+  imports the real `game.js` against a stubbed DOM and runs 240 frames; it is
+  the only automatic check that a render change still executes.
+
+Terrain art assertions are deliberately split: flat structural stone is checked
+against the exported `STONE` palette by name, while ground materials carry tonal
+noise and are checked as a shade of the material within a tolerance.
+
 ## Working style
 Keep the size limit in mind, advise the user and alert them to costly work/directions. Do not code golf or use confusing one-letter variable names unnecessarily, unless explicitly asked.
 

@@ -194,16 +194,16 @@ const near = (actual, expected, message, tolerance = 12) => assert.ok(
 );
 const luma = colour => colour[0] * 0.3 + colour[1] * 0.6 + colour[2] * 0.1;
 
-assert.deepEqual(pixelAt(firstPixels, 5 * 32 + 16, 16), STONE.mass, 'Joined Wall row did not render as dark solid mass');
+near(pixelAt(firstPixels, 5 * 32 + 16, 16), STONE.crown, 'Joined Wall row did not render as a lit crown', 8);
 assert.deepEqual(pixelAt(firstPixels, 5 * 32 + 16, 1), STONE.lip, 'Wall mass is missing its back perimeter lip');
-assert.deepEqual(pixelAt(firstPixels, 5 * 32 + 16, 33), STONE.mass, 'Middle Wall row emitted a repeated lip');
-assert.deepEqual(pixelAt(firstPixels, 5 * 32 + 16, 65), STONE.lip, 'Exposed southern Wall row is missing its facade lip');
+near(pixelAt(firstPixels, 5 * 32 + 16, 33), STONE.crown, 'Middle Wall row emitted a repeated lip', 8);
+assert.deepEqual(pixelAt(firstPixels, 5 * 32 + 16, 2 * 32 + 30), STONE.lip, 'Exposed southern Wall row is missing the lip along its crown edge');
 assert.deepEqual(pixelAt(firstPixels, 5 * 32 + 1, 16), STONE.side, 'Wall run is missing its exposed side return');
 near(pixelAt(firstPixels, 1 * 32 + 16, 2 * 32 + 16), shade(RGB[1], RAISED_LIFT), 'Elevated Grass did not receive the height grade');
 assert.deepEqual(pixelAt(firstPixels, 1 * 32 + 16, 2 * 32), STONE.lip, 'Elevated Grass merged with Ground across its north edge');
 assert.deepEqual(pixelAt(firstPixels, 1 * 32, 2 * 32 + 16), STONE.side, 'Elevated Grass merged with Ground across its side edge');
 assert.deepEqual(pixelAt(firstPixels, 1 * 32 + 16, 2 * 32 + 30), STONE.lip, 'Elevated Grass hid the structural edge');
-assert.deepEqual(pixelAt(firstPixels, 1 * 32 + 16, 3 * 32 + 16), STONE.mass, 'Elevated Grass covered the lower Wall face');
+near(pixelAt(firstPixels, 1 * 32 + 16, 3 * 32 + 16), STONE.face, 'Elevated Grass covered the lower Wall face', 8);
 near(pixelAt(firstPixels, 2 * 32 + 16, 2 * 32 + 16), shade(RGB[4], RAISED_LIFT), 'Elevated Floor did not receive the height grade');
 near(pixelAt(firstPixels, 2 * 32 + 16, 1 * 32 + 16), shade(RGB[3], RAISED_LIFT), 'Elevated Water did not receive the height grade');
 // Props are flat fills, so the grade is checked as an exact relationship
@@ -219,7 +219,7 @@ assert.deepEqual(pixelAt(firstPixels, 3 * 32 + 16, 2 * 32), STONE.lip, 'Stairs a
 assert.deepEqual(pixelAt(firstPixels, 3 * 32 + 16, 2 * 32 + 6), STONE.riser, 'Stairs are missing their riser');
 assert.deepEqual(pixelAt(firstPixels, 4 * 32, 2 * 32 + 4), STONE.tread, 'Joined Stairs emitted an internal rail');
 assert.deepEqual(pixelAt(firstPixels, 4 * 32 + 30, 2 * 32 + 20), STONE.tread, 'Stairs duplicated a rail beside Wall');
-assert.deepEqual(pixelAt(firstPixels, 16, 3 * 32 + 16), STONE.mass, 'Wall behind Stairs emitted a pushed-back facade');
+near(pixelAt(firstPixels, 16, 3 * 32 + 16), STONE.crown, 'Wall behind Stairs emitted a pushed-back facade', 8);
 assert.deepEqual(pixelAt(firstPixels, 1, 4 * 32 + 16), STONE.lip, 'Stairs are missing their outer rail');
 assert.deepEqual(pixelAt(firstPixels, 1 * 32 + 30, 4 * 32 + 16), STONE.mass, 'Stairs are missing their opposite outer rail');
 assert.deepEqual(pixelAt(firstPixels, 3 * 32 + 16, 3 * 32 + 30), STONE.riser, 'Vertically touching Stairs emitted an internal baseline');
