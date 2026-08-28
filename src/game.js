@@ -43,6 +43,7 @@ const AIM_MARGIN = 9;
 const BASE_ZOOM = 2;
 const FIXED_STEP = 1 / 120;
 const SHAFT_SPACING = 232;
+const MOTE_CELL = 72;
 const SHAFT_SKEW = 0.55;
 
 let screenWidth = 1;
@@ -841,6 +842,29 @@ function drawLightShafts(bounds) {
 }
 
 /**
+ * Slow motes give the shafts something to catch and keep an empty field from
+ * looking like a still image. One mote per world cell, drifting down through
+ * its own cell and fading in and out across the trip, so it never pops when it
+ * wraps and the count stays proportional to the viewport.
+ */
+function drawMotes(bounds) {
+  ctx.fillStyle = '#fff6d8';
+  for (let cellY = Math.floor(bounds.top / MOTE_CELL); cellY <= bounds.bottom / MOTE_CELL; cellY++) {
+    for (let cellX = Math.floor(bounds.left / MOTE_CELL); cellX <= bounds.right / MOTE_CELL; cellX++) {
+      const seed = hash(cellX, cellY, 13);
+      const progress = (seed % 997 / 997 + gameTime * 0.04) % 1;
+      ctx.globalAlpha = Math.sin(progress * Math.PI) * 0.4;
+      ctx.fillRect(
+        pixelX(cellX * MOTE_CELL + (seed >>> 10) % MOTE_CELL),
+        pixelY((cellY + progress) * MOTE_CELL),
+        1, 1,
+      );
+    }
+  }
+  ctx.globalAlpha = 1;
+}
+
+/**
  * One multiply pass does both jobs the reference art leans on: it grades the
  * whole frame onto a single warm-centre/cool-corner ramp, and it sinks the
  * frame edges into shadow so the eye stays on the player.
@@ -912,6 +936,7 @@ function draw() {
   }
   drawImpact(playerX, playerY, player.hitEffect, 0.18, '#e94863');
   drawLightShafts(bounds);
+  drawMotes(bounds);
   drawAimMarker(aimX, aimY);
 
   // The grade is a lens effect, so it is applied in screen space after the

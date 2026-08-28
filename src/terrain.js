@@ -579,7 +579,7 @@ function drawScatter(image, level, slots, support, lift) {
     }
     // Tiles carrying a prop are left alone; scatter runs after the slot loop
     // and would otherwise stipple tufts across the bush it grows beside.
-    if (prop || (code !== 1 && code !== 4)) continue;
+    if (prop || (code !== 1 && code !== 3 && code !== 4)) continue;
     const count = terrainHash(tileX, tileY, level.seed + 311) % 4;
     for (let i = 0; i < count; i++) {
       const spot = terrainHash(tileX * 7 + i, tileY * 13 + i * 3, level.seed + 57);
@@ -589,6 +589,10 @@ function drawScatter(image, level, slots, support, lift) {
         // Grass tufts: a dark blade cluster with one lit tip above it.
         fillRect(image, x, y + 1, 3, 2, [40, 79, 43], lift);
         fillRect(image, x + 1, y, 1, 2, [117, 172, 82], lift);
+      } else if (code === 3) {
+        // Water gets flat horizontal glints. Reflections lie along the surface,
+        // so a streak reads as water where a speck would read as debris.
+        fillRect(image, x, y, 5 + spot % 7, 1, [104, 190, 208], lift);
       } else {
         // Slabs chip and craze rather than sprout; single-pixel marks only.
         fillRect(image, x, y, 1 + (spot >> 11 & 1), 1, [166, 163, 143], lift);
