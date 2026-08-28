@@ -675,40 +675,62 @@ function drawImpact(x, y, time, duration, colour) {
   ctx.globalAlpha = 1;
 }
 
+/** Stacked rows of shrinking width; the cheapest way to get a hard-edged
+ * diamond out of axis-aligned fills, and geometric silhouettes are most of
+ * what makes the Constructs read as machines rather than blobs. */
+function drawDiamond(x, y, radius, step, colour) {
+  ctx.fillStyle = colour;
+  for (let row = -radius; row < radius; row += step) {
+    const half = radius - Math.abs(row + step / 2);
+    ctx.fillRect(x - half, y + row, half * 2, step);
+  }
+}
+
 function drawEnemy(enemy, x, y) {
   x = pixelX(x);
   y = pixelY(y);
+  // The shadow sits on the ground and belongs to no fade, so it is drawn
+  // before the hurt and death alphas are set rather than resetting them.
+  drawShadow(x, y + 12, enemy.type ? 9 : 11);
   if (!enemy.health) ctx.globalAlpha = Math.max(0, enemy.death / 0.24);
   else if (enemy.hurt && (enemy.hurt * 24 | 0) & 1) ctx.globalAlpha = 0.35;
   const alert = enemy.mode === 1;
-  drawShadow(x, y + 12, 10);
+  // The core is the tell the player reads during a fight, so it carries the
+  // only saturated colour on the sprite and changes hue on aggro.
+  const core = alert ? '#ff5d8a' : '#4fd6e0';
 
   if (!enemy.type) {
-    // A low stone cube on four dark legs reads as an ancient crab-like guard.
-    ctx.fillStyle = '#423b55';
-    ctx.fillRect(x - 12, y + 5, 5, 9);
-    ctx.fillRect(x + 7, y + 5, 5, 9);
-    ctx.fillRect(x - 11, y - 10, 22, 21);
-    ctx.fillStyle = '#aeb7a7';
-    ctx.fillRect(x - 8, y - 7, 16, 15);
-    ctx.fillStyle = '#dbe0ca';
-    ctx.fillRect(x - 7, y - 6, 13, 4);
-    ctx.fillStyle = alert ? '#f16b9a' : '#62b8ed';
-    ctx.fillRect(x - 3, y, 6, 4);
+    // A squat stone walker: dark chassis, a lit top plate catching the same
+    // light as the ruins, and jointed legs splayed past the shell.
+    ctx.fillStyle = '#161226';
+    for (const side of [-1, 1]) {
+      ctx.fillRect(x + side * 9 - 2, y - 6, 5, 4);
+      ctx.fillRect(x + side * 11 - 2, y - 2, 4, 10);
+      ctx.fillRect(x + side * 8 - 2, y + 8, 4, 4);
+    }
+    ctx.fillRect(x - 11, y - 12, 22, 23);
+    ctx.fillStyle = '#5d6b6a';
+    ctx.fillRect(x - 9, y - 10, 18, 19);
+    ctx.fillStyle = '#b3bda9';
+    ctx.fillRect(x - 9, y - 10, 18, 8);
+    ctx.fillStyle = '#e2e5cd';
+    ctx.fillRect(x - 9, y - 10, 18, 2);
+    ctx.fillStyle = core;
+    ctx.fillRect(x - 4, y - 1, 8, 5);
+    ctx.fillStyle = '#f4feff';
+    ctx.fillRect(x - 2, y, 4, 2);
   } else {
-    // Ranged Constructs float: a compact prism around a bright central lens.
-    const bob = Math.round(Math.sin(gameTime * 3 + enemy.id) * 2) - 4;
-    y += bob;
-    ctx.fillStyle = '#423b55';
-    ctx.fillRect(x - 10, y - 10, 20, 20);
-    ctx.fillStyle = '#c7cfc1';
-    ctx.fillRect(x - 7, y - 7, 14, 14);
-    ctx.fillStyle = '#e5ead7';
-    ctx.fillRect(x - 6, y - 6, 11, 4);
-    ctx.fillStyle = alert ? '#ffc55c' : '#62b8ed';
-    ctx.fillRect(x - 3, y - 3, 6, 6);
-    ctx.fillStyle = '#342d4b';
-    ctx.fillRect(x - 1, y - 1, 2, 2);
+    // Ranged Constructs float, so they get a hovering prism and a longer bob
+    // than any walker could have; the lens is the muzzle the shot comes from.
+    y += Math.round(Math.sin(gameTime * 2.4 + enemy.id) * 2) - 5;
+    drawDiamond(x, y, 13, 2, '#161226');
+    drawDiamond(x, y, 10, 2, '#5d6b6a');
+    ctx.fillStyle = '#b3bda9';
+    ctx.fillRect(x - 5, y - 7, 10, 5);
+    ctx.fillStyle = core;
+    drawDiamond(x, y + 1, 5, 1, core);
+    ctx.fillStyle = '#f4feff';
+    ctx.fillRect(x - 1, y, 3, 2);
   }
 
   ctx.globalAlpha = 1;
@@ -741,10 +763,46 @@ function drawPlayer(playerX, playerY) {
   const y = pixelY(playerY);
   drawShadow(x, y + 12, 9);
   ctx.globalAlpha = player.invulnerability && (player.invulnerability * 24 | 0) & 1 ? 0.35 : 1;
-  ctx.fillStyle = '#342d4b';
-  ctx.fillRect(x - 11, y - 13, 22, 26);
-  ctx.fillStyle = player.dashTime ? '#fff3a6' : '#fffaf0';
-  ctx.fillRect(x - 8, y - 10, 16, 20);
+
+  // Which way the head and horn lean is the only animation there is, so it
+  // carries all of the facing: aiming behind the unicorn turns it around.
+  const flip = player.facingX < 0 ? -1 : 1;
+  const lean = player.facingY < -0.45 ? -3 : player.facingY > 0.45 ? 2 : 0;
+
+  const headX = x + flip * 5;
+  const headY = y - 10 + lean;
+
+  // The whole silhouette is laid down first and every later shape insets into
+  // it. That is what produces an even dark outline without drawing one, and
+  // the outline is most of why the reference sprites read at this size. Every
+  // part overlaps its neighbour, so the unicorn reads as one animal rather
+  // than as a stack of separate boxes.
+  ctx.fillStyle = '#171325';
+  ctx.fillRect(x - 8, y - 5, 16, 18);
+  ctx.fillRect(headX - 5, headY - 6, 11, 12);
+  ctx.fillRect(x - flip * 10 - 1, y - 1, 5, 12);
+  for (const side of [-6, 2]) ctx.fillRect(x + side, y + 12, 4, 4);
+
+  ctx.fillStyle = player.dashTime ? '#fff7bd' : '#f6f3e7';
+  ctx.fillRect(x - 6, y - 3, 12, 15);
+  ctx.fillRect(headX - 3, headY - 4, 7, 11);
+  // A shaded flank keeps the coat from reading as a flat cut-out.
+  ctx.fillStyle = '#bfbcd0';
+  ctx.fillRect(x - 6, y + 7, 12, 5);
+  ctx.fillStyle = '#171325';
+  ctx.fillRect(headX + flip, headY - 1, 2, 2);
+
+  // The rainbow is the one saturated thing on a pale sprite, so it does the
+  // work an animation frame would: mane down the back of the neck and a tail
+  // at the rump, both inside the same dark outline as the rest of the body.
+  const mane = ['#f16b9a', '#ffc55c', '#68d48b', '#62b8ed', '#9c78df'];
+  for (let strand = 0; strand < 5; strand++) {
+    ctx.fillStyle = mane[strand];
+    ctx.fillRect(headX - flip * 4 - 1, headY - 5 + strand * 2, 3, 2);
+    ctx.fillRect(x - flip * 9 - 1, y + 1 + strand * 2, 3, 2);
+  }
+  ctx.fillStyle = '#ffe9a8';
+  ctx.fillRect(headX + flip * 2 - 1, headY - 11, 2, 6);
   ctx.globalAlpha = 1;
 }
 

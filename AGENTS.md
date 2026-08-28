@@ -88,6 +88,10 @@ There is no browser in this toolchain, so two dev-only scripts stand in for one:
   writes a PNG. With a crop it also applies a stand-in for the runtime light
   shafts and colour grade, so a crop previews roughly what the player sees.
   Those numbers are duplicated from `game.js` and must be kept in step by hand.
+- `npm run preview:frame -- <out.png> [frames] [x,y,w,h,zoom]` renders a real
+  frame by handing `game.js` a rasterising 2D context, so sprites, shafts,
+  motes and the grade can be judged together. The crop takes a magnification,
+  which is the only practical way to look at a 20px sprite.
 - `npm test` runs the terrain, editor and game smoke checks. The game smoke
   imports the real `game.js` against a stubbed DOM and runs 240 frames; it is
   the only automatic check that a render change still executes.
