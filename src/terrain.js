@@ -648,25 +648,26 @@ function drawBand(image, level, slots, support, upper = false, field = null) {
     for (let tileY = 0; tileY < level.tileHeight; tileY++) for (let tileX = 0; tileX < level.tileWidth; tileX++) {
       const index = tileY * level.tileWidth + tileX;
       if (!support[index] || !slotUsedNear(level, slots, slot, tileX, tileY)) continue;
-      const strict = upper && (!supportAt(level, support, tileX - 1, tileY)
-        || !supportAt(level, support, tileX + 1, tileY)
-        || !supportAt(level, support, tileX, tileY - 1)
-        || !supportAt(level, support, tileX, tileY + 1));
       const x0 = tileX * AUTHOR_TILE;
       const y0 = tileY * AUTHOR_TILE;
       const ownCode = slots[index * MAX_STACK_ENTRIES + slot];
       const spread = ownCode === 4 ? 2 : ownCode === 3 ? 4 : 6;
       const base = upper ? RAISED_LIFT : 0;
       for (let y = y0; y < y0 + AUTHOR_TILE; y++) for (let x = x0; x < x0 + AUTHOR_TILE; x++) {
-        let sampleX = x;
-        let sampleY = y;
-        if (!strict) {
-          sampleX += terrainHash(x >> 3, y >> 3, level.seed + slot * 17) % (spread * 2 + 1) - spread;
-          sampleY += terrainHash(x >> 3, y >> 3, level.seed + slot * 29) % (spread * 2 + 1) - spread;
-        }
-        const sampledTile = tileIndex(level, Math.floor(sampleX / AUTHOR_TILE), Math.floor(sampleY / AUTHOR_TILE));
-        if (sampledTile < 0) continue;
-        const code = slots[sampledTile * MAX_STACK_ENTRIES + slot];
+        const sampleX = x + terrainHash(x >> 3, y >> 3, level.seed + slot * 17) % (spread * 2 + 1) - spread;
+        const sampleY = y + terrainHash(x >> 3, y >> 3, level.seed + slot * 29) % (spread * 2 + 1) - spread;
+        let sampled = tileIndex(level, Math.floor(sampleX / AUTHOR_TILE), Math.floor(sampleY / AUTHOR_TILE));
+        // Only the destination is confined to this tile; the sample is free to
+        // wander, which is what roughens a material edge. On the Elevated band
+        // a sample that wanders off the platform would leave the pixel unpainted
+        // and let the structure below show through, so it falls back to this
+        // tile's own material. That keeps the structural edge crisp while still
+        // letting neighbouring Elevated materials mix - without the fallback a
+        // narrow platform had to disable jitter entirely and rendered as a grid
+        // of hard tile-sized squares.
+        if (upper && (sampled < 0 || !support[sampled])) sampled = index;
+        if (sampled < 0) continue;
+        const code = slots[sampled * MAX_STACK_ENTRIES + slot];
         if (code > 0 && code < 5) {
           setPixel(image, x, y, RGB[code], base + tone(x, y, code, level.seed));
           if (field) field[y * image.width + x] = code;
@@ -783,6 +784,58 @@ function drawStairs(image, level, stairs, walls) {
   }
 }
 
+const FALLOFF_REACH = 4;
+
+/**
+ * Sink the outermost ground into the void. Without this the world ends at a
+ * cut line, which is the one thing that most gives away a tilemap; the
+ * reference art always frames its play area in darkness so the edge reads as
+ * distance rather than as the end of the data.
+ *
+ * The distance field is per tile, but it is sampled bilinearly per pixel -
+ * a tile-resolution ramp would just replace one visible grid with another.
+ */
+function drawEdgeFalloff(image, level, support) {
+  const { tileWidth, tileHeight } = level;
+  const distance = new Uint8Array(tileWidth * tileHeight).fill(FALLOFF_REACH);
+  for (let i = 0; i < distance.length; i++) if (!support[i]) distance[i] = 0;
+  // Only painted void seeds the falloff, never the array bounds. The camera is
+  // clamped to the world, so ground that runs to the world edge is never seen
+  // past and needs no framing - it is the authored void that has to recede.
+  const distanceAt = (x, y) => x < 0 || y < 0 || x >= tileWidth || y >= tileHeight
+    ? FALLOFF_REACH : distance[y * tileWidth + x];
+  for (let pass = 1; pass < FALLOFF_REACH; pass++) {
+    for (let y = 0; y < tileHeight; y++) for (let x = 0; x < tileWidth; x++) {
+      const index = y * tileWidth + x;
+      if (!distance[index]) continue;
+      distance[index] = Math.min(distance[index], 1 + Math.min(
+        distanceAt(x - 1, y), distanceAt(x + 1, y),
+        distanceAt(x, y - 1), distanceAt(x, y + 1),
+      ));
+    }
+  }
+
+  for (let tileY = 0; tileY < tileHeight; tileY++) for (let tileX = 0; tileX < tileWidth; tileX++) {
+    if (distance[tileY * tileWidth + tileX] >= FALLOFF_REACH) continue;
+    for (let py = 0; py < AUTHOR_TILE; py++) for (let px = 0; px < AUTHOR_TILE; px++) {
+      const sampleX = tileX + (px + 0.5) / AUTHOR_TILE - 0.5;
+      const sampleY = tileY + (py + 0.5) / AUTHOR_TILE - 0.5;
+      const x0 = Math.floor(sampleX);
+      const y0 = Math.floor(sampleY);
+      const alongX = sampleX - x0;
+      const alongY = sampleY - y0;
+      const top = distanceAt(x0, y0) + (distanceAt(x0 + 1, y0) - distanceAt(x0, y0)) * alongX;
+      const bottom = distanceAt(x0, y0 + 1) + (distanceAt(x0 + 1, y0 + 1) - distanceAt(x0, y0 + 1)) * alongX;
+      const fade = 1 - Math.min(1, (top + (bottom - top) * alongY) / FALLOFF_REACH);
+      if (fade <= 0) continue;
+      const index = ((tileY * AUTHOR_TILE + py) * image.width + tileX * AUTHOR_TILE + px) * 4;
+      for (let channel = 0; channel < 3; channel++) {
+        image.data[index + channel] += (RGB[0][channel] - image.data[index + channel]) * fade * 0.9;
+      }
+    }
+  }
+}
+
 /** Bake the ordered stack once; gameplay only crops this static canvas. */
 export function buildTerrain(level, scale = CACHE_SCALE, canvas = document.createElement('canvas')) {
   canvas.width = Math.ceil(level.width / scale);
@@ -800,6 +853,10 @@ export function buildTerrain(level, scale = CACHE_SCALE, canvas = document.creat
   drawBand(image, level, layers.upper, layers.upperSupport, true, field);
   drawUpperEdges(image, level, layers.upperSupport);
   drawStairs(image, level, layers.stairs, layers.walls);
+  // Last, so structures near the boundary recede with the ground they stand on.
+  drawEdgeFalloff(image, level, layers.groundSupport.map(
+    (value, index) => value || layers.upperSupport[index] || layers.walls[index],
+  ));
   context.putImageData(image, 0, 0);
   return { canvas, level, scale };
 }
