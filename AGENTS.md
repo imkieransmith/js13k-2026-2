@@ -88,11 +88,14 @@ There is no browser in this toolchain, so these dev-only scripts stand in for on
   writes a PNG. With a crop it also applies a stand-in for the runtime light
   shafts and colour grade, so a crop previews roughly what the player sees.
   Those numbers are duplicated from `game.js` and must be kept in step by hand.
-- `npm run preview:frame -- out=<png> [frames=N] [crop=x,y,w,h,zoom] [hold=KeyA]`
-  renders a real frame by handing `game.js` a rasterising 2D context, so
-  sprites, shafts, motes and the grade can be judged together. `crop` takes a
-  magnification, the only practical way to look at a 20px sprite, and `hold`
-  presses movement keys so the camera can be walked somewhere worth seeing.
+- `npm run preview:frame -- out=<png> [frames=N] [crop=x,y,w,h,zoom] [hold=KeyA]
+  [aim=x,y] [attack=f,f] [laser=N]` renders a real frame by handing `game.js` a
+  rasterising 2D context, so sprites, shafts, motes and the grade can be judged
+  together. `crop` takes a magnification, the only practical way to look at a
+  20px sprite, and `hold` presses movement keys so the camera can be walked
+  somewhere worth seeing. `aim` is a screen-space pointer position, `attack`
+  lists the frames to click on, and `laser` holds right-click for the final N
+  frames — the beam needs several landed hits before it has charge to fire.
 - `npm test` runs the terrain, editor and game smoke checks. The game smoke
   imports the real `game.js` against a stubbed DOM and runs 240 frames; it is
   the only automatic check that a render change still executes.

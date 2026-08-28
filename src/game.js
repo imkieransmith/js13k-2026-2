@@ -46,6 +46,20 @@ const SHAFT_SPACING = 232;
 const MOTE_CELL = 72;
 const SHAFT_SKEW = 0.55;
 
+// One spectrum for every rainbow in the game — mane, tail, dash trail, horn
+// sweep and laser. Sharing it is what makes them read as the same magic rather
+// than as five effects that happen to be colourful.
+const RAINBOW = ['#ff7ab0', '#ffc55c', '#fff3a6', '#8ce6a0', '#6fc8f5', '#b48cf0'];
+// Two dark inks, one warm for the unicorn and its magic and one cool for the
+// stone Constructs. Every sprite and effect is built silhouette-first out of
+// these, so a single pixel of ink shows around each shape: the reference art
+// outlines everything at exactly one pixel, and a thicker border is the single
+// thing that most makes a sprite look pasted onto the world rather than in it.
+const INK = '#1b1a2c';
+const STONE_INK = '#182129';
+const WARNING = '#e0324f';
+const HOT = '#fffdf2';
+
 let screenWidth = 1;
 let screenHeight = 1;
 let zoom = BASE_ZOOM;
@@ -590,97 +604,178 @@ function visibleBounds(cameraX, cameraY) {
   };
 }
 
-// A translucent stepped blob, not an opaque rectangle: the surface underneath
-// stays readable, so the same shadow works on grass, stone and water.
+// Three tapering translucent rows. Each overlaps the last, so the shadow comes
+// out dense under the body and thin at its rim without a gradient — a flat
+// rectangle under a character reads as a hole cut in the floor, and it stays
+// translucent so the same shadow works over grass, stone and water alike.
 function drawShadow(x, y, radius) {
-  ctx.globalAlpha = 0.42;
+  ctx.globalAlpha = 0.22;
   ctx.fillStyle = '#0b171c';
-  ctx.fillRect(x - radius, y - 2, radius * 2, 4);
-  ctx.fillRect(x - radius + 3, y - 4, radius * 2 - 6, 8);
+  ctx.fillRect(x - radius, y - 1, radius * 2, 3);
+  ctx.fillRect(x - radius + 2, y - 2, radius * 2 - 4, 5);
+  ctx.fillRect(x - radius + 5, y - 3, radius * 2 - 10, 7);
   ctx.globalAlpha = 1;
 }
 
-function drawEnemyTelegraph(enemy, x, y) {
-  const hitFlash = !enemy.type && enemy.attackEffect > 0;
-  if (enemy.windup <= 0 && !hitFlash) return;
-  const duration = enemy.type ? RANGED_WINDUP : MELEE_WINDUP;
-  const progress = hitFlash
-    ? 1
-    : clamp((1 - enemy.windup / duration) * 1.08, 0, 1);
-  // Cubic easing keeps the opening genuinely faint. On impact, a larger pale
-  // red frame creates visible contrast with the fully opaque final warning.
-  const freshHit = hitFlash && enemy.attackEffect > 0.1;
-  ctx.globalAlpha = hitFlash
-    ? freshHit ? 1 : enemy.attackEffect / 0.1
-    : progress * progress * progress;
-  ctx.fillStyle = freshHit ? '#ffd0da' : '#e94863';
+/**
+ * Pick a layer's paint, which is either one colour or a ramp sampled along the
+ * effect. A ramp is how the rainbow runs *along* a beam or blade instead of
+ * repeating per stamp, which was what made the old effects read as beads.
+ */
+function paintOf(paint, amount) {
+  return typeof paint === 'string'
+    ? paint
+    : paint[(amount % paint.length + paint.length) % paint.length | 0];
+}
 
-  if (enemy.type) {
-    // The warning is the projectile's committed path, not a live tracker.
-    for (let distance = 14; distance < 300; distance += 6) {
-      const lineX = pixelX(x + enemy.attackDirectionX * distance);
-      const lineY = pixelY(y + enemy.attackDirectionY * distance);
-      ctx.fillRect(lineX - 1, lineY - 1, 3, 3);
-    }
-  } else {
-    // Reveal the exact damage sector as a low-resolution sweeping red field.
-    const centre = Math.atan2(enemy.attackDirectionY, enemy.attackDirectionX);
-    const start = centre - ENEMY_ATTACK_ARC / 2;
-    const steps = 18;
-    const count = Math.max(1, Math.ceil(steps * progress));
-    for (let angleStep = 0; angleStep < count; angleStep++) {
-      const angle = start + ENEMY_ATTACK_ARC * angleStep / (steps - 1);
-      for (let distance = 20; distance <= ENEMY_ATTACK_REACH; distance += 8) {
-        const sectorX = pixelX(x + Math.cos(angle) * distance);
-        const sectorY = pixelY(y + Math.sin(angle) * distance);
-        const stamp = freshHit ? 7 : 5;
-        ctx.fillRect(
-          sectorX - stamp / 2,
-          sectorY - stamp / 2,
-          stamp, stamp,
-        );
-      }
+/**
+ * Stamp squares along a straight world-space ray. Every straight effect — the
+ * rainbow laser, a Construct's sight line, a shot's tail, an impact spike — is
+ * this shape. Stamps are spaced far closer than they are wide and each layer
+ * runs the full length, so the beam gets one even outline down its whole edge
+ * rather than an outline around every stamp.
+ */
+function drawBeam(x, y, dirX, dirY, from, to, layers, phase = 0, step = 2) {
+  // Each layer runs the whole length before the next one starts. Drawing every
+  // layer per stamp instead lets the next stamp's backing bury the previous
+  // stamp's colour, which leaves a dark line with slivers of colour trapped in
+  // it rather than a coloured beam with one dark edge.
+  for (const [size, paint] of layers) {
+    for (let distance = from; distance < to; distance += step) {
+      ctx.fillStyle = paintOf(paint, distance / 4 + phase);
+      ctx.fillRect(
+        pixelX(x + dirX * distance) - (size >> 1),
+        pixelY(y + dirY * distance) - (size >> 1),
+        size, size,
+      );
     }
   }
+}
+
+/**
+ * Stamp a tapered crescent along an arc: the unicorn's horn sweep and the
+ * Constructs' melee telegraph are the same blade with different paint. The
+ * taper puts the mass in the middle of the swing, which is what separates a
+ * slash from a drawn circle segment, and `from`/`to` let the caller sweep the
+ * blade round the arc so a still frame still reads as a swing in progress.
+ */
+function drawCrescent(x, y, radius, centre, arc, from, to, thickness, layers) {
+  const steps = 22;
+  // Layer at a time along the whole arc, for the same reason the beam does.
+  for (const [grow, paint] of layers) {
+    for (let step = 0; step <= steps; step++) {
+      const amount = step / steps;
+      const size = Math.round(Math.sin(Math.PI * amount) * thickness) + grow;
+      if (size <= 0) continue;
+      const angle = centre + arc * (from + (to - from) * amount - 0.5);
+      ctx.fillStyle = paintOf(paint, amount * (paint.length - 0.01));
+      ctx.fillRect(
+        pixelX(x + Math.cos(angle) * radius) - (size >> 1),
+        pixelY(y + Math.sin(angle) * radius) - (size >> 1),
+        size, size,
+      );
+    }
+  }
+}
+
+function drawEnemyTelegraph(enemy, x, y) {
+  const striking = !enemy.type && enemy.attackEffect > 0;
+  if (enemy.windup <= 0 && !striking) return;
+  const duration = enemy.type ? RANGED_WINDUP : MELEE_WINDUP;
+  const progress = striking ? 1 : clamp(1 - enemy.windup / duration, 0, 1);
+  const centre = Math.atan2(enemy.attackDirectionY, enemy.attackDirectionX);
+
+  if (enemy.type) {
+    // A sight line one pixel thick, growing along the path it has committed to
+    // and thickening only at the last moment. A thin line is legible without
+    // covering the ground the player has to read to dodge across it.
+    // Stepped by one so a one-pixel line comes out continuous, and left fully
+    // opaque: translucent stamps compound wherever two overlap, which speckles
+    // a line this thin. Intensity is carried by colour instead.
+    drawBeam(
+      x, y, enemy.attackDirectionX, enemy.attackDirectionY,
+      14, 30 + progress * 270,
+      [[progress > 0.86 ? 3 : 1,
+        progress > 0.86 ? '#ffd0da' : progress > 0.5 ? '#e94863' : WARNING]],
+      0, 1,
+    );
+    return;
+  }
+
+  // The melee arc opens outward from the direction of the strike, thickening
+  // and heating as it goes, then fires as a bright blade. Growing from the
+  // centre rather than wiping from one edge matters: a wipe spends its first
+  // frames as a smear off to one side of where the blow will actually land.
+  // Build-up is carried by size and colour rather than by fading in, which
+  // keeps the warning opaque and so as legible as the reference floor decals.
+  // It also reaches outward as it charges. A warning drawn straight out at
+  // full reach is a sliver floating in open ground with nothing tying it to
+  // the machine that threw it; one that grows out of the hull is unmistakably
+  // that Construct's swing, and its travel is the count-in to the blow.
+  const span = striking ? 1 : progress;
+  ctx.globalAlpha = striking ? Math.min(1, enemy.attackEffect / 0.07) : 1;
+  drawCrescent(
+    x, y, 18 + span * (ENEMY_ATTACK_REACH - 27), centre, ENEMY_ATTACK_ARC,
+    // The warning stays a slim bright arc and only the blow itself is a solid
+    // blade. A telegraph as heavy as its strike leaves nothing for the strike
+    // to do, and covers the ground the player is trying to read a way out of.
+    0.5 - span / 2, 0.5 + span / 2, striking ? 9 : 2 + progress * 2,
+    striking
+      ? [[3, '#7d1b32'], [1, '#ff8fa6'], [-4, '#fff1f3']]
+      : [[2, '#6d1329'], [0, progress > 0.72 ? '#ff5d78' : WARNING]],
+  );
   ctx.globalAlpha = 1;
 }
 
 function drawEnemyAttack(enemy, x, y) {
   if (!enemy.type || enemy.attackEffect <= 0) return;
   const progress = 1 - enemy.attackEffect / ENEMY_ATTACK_EFFECT;
-  // The projectile supplies the travel animation; this is its muzzle burst.
-  const distance = 13 + progress * 18;
+  // The projectile supplies the travel animation; this is its muzzle burst,
+  // which collapses as it moves off so the shot looks pushed rather than lit.
+  const distance = 12 + progress * 17;
   const flashX = pixelX(x + enemy.attackDirectionX * distance);
   const flashY = pixelY(y + enemy.attackDirectionY * distance);
-  ctx.fillStyle = progress < 0.5 ? '#ffc55c' : '#fff3a6';
-  ctx.fillRect(flashX - 4, flashY - 4, 9, 9);
-  ctx.fillStyle = '#fffaf0';
-  ctx.fillRect(flashX - 2, flashY - 2, 5, 5);
+  const size = 9 - (progress * 6 | 0);
+  ctx.fillStyle = '#ffc55c';
+  ctx.fillRect(flashX - (size >> 1), flashY - (size >> 1), size, size);
+  ctx.fillStyle = HOT;
+  ctx.fillRect(flashX - (size >> 2), flashY - (size >> 2), size >> 1, size >> 1);
 }
 
+/**
+ * A hit is a white core with four spikes that stretch and thin as they travel
+ * out. The core outliving the spikes by a frame is what gives the hit its
+ * punch; spikes on their own read as a firework going off, not as contact.
+ */
 function drawImpact(x, y, time, duration, colour) {
   if (time <= 0) return;
   const progress = 1 - time / duration;
-  const radius = 5 + progress * 14;
-  ctx.globalAlpha = time / duration;
-  ctx.fillStyle = colour;
-  for (let i = 0; i < 8; i++) {
-    const angle = Math.PI / 4 * i;
-    ctx.fillRect(
-      pixelX(x + Math.cos(angle) * radius) - 2,
-      pixelY(y + Math.sin(angle) * radius) - 2,
-      4, 4,
+  const reach = 7 + progress * 24;
+  const thickness = Math.max(1, 4 - (progress * 4 | 0));
+  ctx.globalAlpha = 1 - progress * progress;
+  for (let spoke = 0; spoke < 4; spoke++) {
+    const angle = Math.PI / 4 + Math.PI / 2 * spoke;
+    drawBeam(
+      x, y, Math.cos(angle), Math.sin(angle),
+      reach * 0.35, reach, [[thickness, colour]], 0, 1,
     );
+  }
+  const core = 9 - (progress * 13 | 0);
+  if (core > 0) {
+    ctx.fillStyle = HOT;
+    ctx.fillRect(pixelX(x) - (core >> 1), pixelY(y) - (core >> 1), core, core);
   }
   ctx.globalAlpha = 1;
 }
 
 /** Stacked rows of shrinking width; the cheapest way to get a hard-edged
  * diamond out of axis-aligned fills, and geometric silhouettes are most of
- * what makes the Constructs read as machines rather than blobs. */
-function drawDiamond(x, y, radius, step, colour) {
+ * what makes the Constructs read as machines rather than blobs. Starting part
+ * way down the shape shades only its lower half, which is how the prism gets a
+ * lit side without a second pass of geometry. */
+function drawDiamond(x, y, radius, step, colour, fromRow = -radius) {
   ctx.fillStyle = colour;
-  for (let row = -radius; row < radius; row += step) {
+  for (let row = fromRow; row < radius; row += step) {
     const half = radius - Math.abs(row + step / 2);
     ctx.fillRect(x - half, y + row, half * 2, step);
   }
@@ -700,35 +795,57 @@ function drawEnemy(enemy, x, y) {
   const core = alert ? '#ff5d8a' : '#4fd6e0';
 
   if (!enemy.type) {
-    // A squat stone walker: dark chassis, a lit top plate catching the same
-    // light as the ruins, and jointed legs splayed past the shell.
-    ctx.fillStyle = '#161226';
+    // A squat stone walker. The legs are drawn out past the shell and step out
+    // of phase with each other, so the silhouette is never a plain rectangle —
+    // which was most of what made the old chassis read as an appliance.
+    const gait = Math.round(Math.sin(gameTime * 5 + enemy.id) * 1.5);
+    ctx.fillStyle = STONE_INK;
     for (const side of [-1, 1]) {
-      ctx.fillRect(x + side * 9 - 2, y - 6, 5, 4);
-      ctx.fillRect(x + side * 11 - 2, y - 2, 4, 10);
-      ctx.fillRect(x + side * 8 - 2, y + 8, 4, 4);
+      const lift = side * gait;
+      ctx.fillRect(x + side * 11 - 2, y - 4, 4, 8);
+      ctx.fillRect(x + side * 13 - 2, y + 3 + lift, 4, 6);
+      ctx.fillRect(x + side * 12 - 2, y + 8 + lift, 5, 3);
     }
-    ctx.fillRect(x - 11, y - 12, 22, 23);
-    ctx.fillStyle = '#5d6b6a';
-    ctx.fillRect(x - 9, y - 10, 18, 19);
-    ctx.fillStyle = '#b3bda9';
-    ctx.fillRect(x - 9, y - 10, 18, 8);
-    ctx.fillStyle = '#e2e5cd';
-    ctx.fillRect(x - 9, y - 10, 18, 2);
+    ctx.fillStyle = '#5f706c';
+    for (const side of [-1, 1]) ctx.fillRect(x + side * 11 - 1, y - 3, 2, 6);
+    // A broad shouldered hull over a narrower base. Two stacked widths cost one
+    // extra fill and buy a silhouette that steps, which is the whole difference
+    // between a machine crouching on the grass and a box sitting on it.
+    ctx.fillStyle = STONE_INK;
+    ctx.fillRect(x - 10, y - 14, 20, 11);
+    ctx.fillRect(x - 8, y - 3, 16, 11);
+    // Banded from a lit crown down into ground shadow. The same overhead light
+    // falls on the ruins, so a Construct standing among them sits in the scene
+    // rather than on top of it.
+    ctx.fillStyle = '#d6dcc2';
+    ctx.fillRect(x - 9, y - 13, 18, 2);
+    ctx.fillStyle = '#a3af9c';
+    ctx.fillRect(x - 9, y - 11, 18, 7);
+    ctx.fillStyle = '#6c7c78';
+    ctx.fillRect(x - 7, y - 2, 14, 5);
+    ctx.fillStyle = '#415153';
+    ctx.fillRect(x - 7, y + 3, 14, 4);
+    // A visor recessed across the seam between the two hull widths, which ties
+    // them into one body. The core is the only saturated colour anywhere on the
+    // sprite, so aggro reads instantly however busy the frame gets.
+    ctx.fillStyle = STONE_INK;
+    ctx.fillRect(x - 6, y - 7, 12, 6);
     ctx.fillStyle = core;
-    ctx.fillRect(x - 4, y - 1, 8, 5);
+    ctx.fillRect(x - 5, y - 6, 10, 3);
     ctx.fillStyle = '#f4feff';
-    ctx.fillRect(x - 2, y, 4, 2);
+    ctx.fillRect(x - 2, y - 6, 4, 3);
   } else {
     // Ranged Constructs float, so they get a hovering prism and a longer bob
     // than any walker could have; the lens is the muzzle the shot comes from.
-    y += Math.round(Math.sin(gameTime * 2.4 + enemy.id) * 2) - 5;
-    drawDiamond(x, y, 13, 2, '#161226');
-    drawDiamond(x, y, 10, 2, '#5d6b6a');
-    ctx.fillStyle = '#b3bda9';
-    ctx.fillRect(x - 5, y - 7, 10, 5);
-    ctx.fillStyle = core;
-    drawDiamond(x, y + 1, 5, 1, core);
+    y += Math.round(Math.sin(gameTime * 2.4 + enemy.id) * 2) - 6;
+    drawDiamond(x, y, 13, 1, STONE_INK);
+    drawDiamond(x, y, 12, 1, '#b3bda9');
+    drawDiamond(x, y, 12, 1, '#5f706c', 1);
+    ctx.fillStyle = '#e2e5cd';
+    ctx.fillRect(x - 4, y - 9, 8, 2);
+    ctx.fillStyle = STONE_INK;
+    ctx.fillRect(x - 5, y - 3, 10, 8);
+    drawDiamond(x, y + 1, 4, 1, core);
     ctx.fillStyle = '#f4feff';
     ctx.fillRect(x - 1, y, 3, 2);
   }
@@ -738,24 +855,36 @@ function drawEnemy(enemy, x, y) {
 
 function drawProjectiles(alpha) {
   for (const projectile of projectiles) {
-    const x = pixelX(projectile.previousX + (projectile.x - projectile.previousX) * alpha);
-    const y = pixelY(projectile.previousY + (projectile.y - projectile.previousY) * alpha);
-    ctx.fillStyle = '#423b55';
-    ctx.fillRect(x - 4, y - 4, 9, 9);
-    ctx.fillStyle = '#ffc55c';
-    ctx.fillRect(x - 2, y - 2, 5, 5);
+    const x = projectile.previousX + (projectile.x - projectile.previousX) * alpha;
+    const y = projectile.previousY + (projectile.y - projectile.previousY) * alpha;
+    const speed = Math.hypot(projectile.vx, projectile.vy) || 1;
+    const backX = -projectile.vx / speed;
+    const backY = -projectile.vy / speed;
+    // A tail stepping down in width behind the head reads as a shot in flight.
+    // The bordered square this replaced read as an object hanging in mid-air.
+    drawBeam(x, y, backX, backY, 0, 8, [[5, INK], [3, '#ffc55c']]);
+    drawBeam(x, y, backX, backY, 8, 16, [[3, INK], [1, '#ffc55c']]);
     ctx.fillStyle = '#fff3a6';
-    ctx.fillRect(x - 1, y - 1, 2, 2);
+    ctx.fillRect(pixelX(x) - 2, pixelY(y) - 2, 5, 5);
+    ctx.fillStyle = HOT;
+    ctx.fillRect(pixelX(x) - 1, pixelY(y) - 1, 3, 3);
   }
 }
 
 function drawPlayer(playerX, playerY) {
+  // The dash leaves the body's own silhouette behind it, tinted through the
+  // spectrum. Matching the barrel rather than using a bigger block keeps the
+  // trail reading as afterimages of the unicorn instead of dropped confetti.
   for (let i = 0; i < trails.length; i++) {
     const trail = trails[i];
-    const colours = ['#f16b9a', '#ffc55c', '#68d48b', '#62b8ed', '#9c78df'];
-    ctx.globalAlpha = trail.life / 0.16 * 0.82;
-    ctx.fillStyle = colours[i % colours.length];
-    ctx.fillRect(pixelX(trail.x) - 9, pixelY(trail.y) - 11, 18, 22);
+    const ghostX = pixelX(trail.x);
+    const ghostY = pixelY(trail.y);
+    ctx.globalAlpha = trail.life / 0.16 * 0.7;
+    ctx.fillStyle = RAINBOW[i % RAINBOW.length];
+    ctx.fillRect(ghostX - 7, ghostY - 5, 14, 17);
+    // The head is thrown forward along the dash, so the ghost keeps the
+    // unicorn's outline. A bare rectangle reads as dropped confetti.
+    ctx.fillRect(ghostX + player.dashX * 5 - 4, ghostY + player.dashY * 5 - 12, 9, 12);
   }
   ctx.globalAlpha = 1;
 
@@ -772,101 +901,116 @@ function drawPlayer(playerX, playerY) {
   const headX = x + flip * 5;
   const headY = y - 10 + lean;
 
-  // The whole silhouette is laid down first and every later shape insets into
-  // it. That is what produces an even dark outline without drawing one, and
-  // the outline is most of why the reference sprites read at this size. Every
-  // part overlaps its neighbour, so the unicorn reads as one animal rather
-  // than as a stack of separate boxes.
-  ctx.fillStyle = '#171325';
-  ctx.fillRect(x - 8, y - 5, 16, 18);
-  ctx.fillRect(headX - 5, headY - 6, 11, 12);
-  ctx.fillRect(x - flip * 10 - 1, y - 1, 5, 12);
-  for (const side of [-6, 2]) ctx.fillRect(x + side, y + 12, 4, 4);
+  // The whole silhouette is laid down first and every later shape insets one
+  // pixel into it. That is what produces an even outline without drawing one,
+  // and one pixel is the width the reference art uses: at two the sprite stops
+  // belonging to the scene and starts looking stickered onto it. Every part
+  // overlaps its neighbour, so the unicorn reads as one animal rather than as
+  // a stack of separate boxes.
+  ctx.fillStyle = INK;
+  ctx.fillRect(x - 8, y - 6, 16, 19);
+  ctx.fillRect(headX - 5, headY - 7, 11, 13);
+  ctx.fillRect(x - flip * 10 - 1, y - 2, 5, 14);
+  ctx.fillRect(headX + flip * 2 - 2, headY - 13, 4, 8);
+  for (const side of [-7, 3]) ctx.fillRect(x + side, y + 12, 5, 5);
 
-  ctx.fillStyle = player.dashTime ? '#fff7bd' : '#f6f3e7';
-  ctx.fillRect(x - 6, y - 3, 12, 15);
-  ctx.fillRect(headX - 3, headY - 4, 7, 11);
-  // A shaded flank keeps the coat from reading as a flat cut-out.
-  ctx.fillStyle = '#bfbcd0';
-  ctx.fillRect(x - 6, y + 7, 12, 5);
-  ctx.fillStyle = '#171325';
-  ctx.fillRect(headX + flip, headY - 1, 2, 2);
+  const coat = player.dashTime ? '#fff7bd' : '#f6f3e7';
+  ctx.fillStyle = coat;
+  ctx.fillRect(x - 7, y - 5, 14, 17);
+  ctx.fillRect(headX - 4, headY - 6, 9, 11);
+  for (const side of [-6, 4]) ctx.fillRect(x + side, y + 12, 3, 3);
+  // A shaded underside and a lit back keep the coat from reading as a flat
+  // cut-out, and put the light on the unicorn where it is on everything else.
+  ctx.fillStyle = '#c8c4d8';
+  ctx.fillRect(x - 7, y + 7, 14, 5);
+  ctx.fillStyle = '#fffdf4';
+  ctx.fillRect(x - 7, y - 5, 14, 2);
+  ctx.fillStyle = INK;
+  ctx.fillRect(headX + flip, headY - 2, 2, 2);
 
   // The rainbow is the one saturated thing on a pale sprite, so it does the
   // work an animation frame would: mane down the back of the neck and a tail
-  // at the rump, both inside the same dark outline as the rest of the body.
-  const mane = ['#f16b9a', '#ffc55c', '#68d48b', '#62b8ed', '#9c78df'];
+  // at the rump, both inset inside the same outline as the rest of the body.
   for (let strand = 0; strand < 5; strand++) {
-    ctx.fillStyle = mane[strand];
-    ctx.fillRect(headX - flip * 4 - 1, headY - 5 + strand * 2, 3, 2);
-    ctx.fillRect(x - flip * 9 - 1, y + 1 + strand * 2, 3, 2);
+    ctx.fillStyle = RAINBOW[strand];
+    ctx.fillRect(headX - flip * 3 - 1, headY - 6 + strand * 2, 3, 2);
+    ctx.fillRect(x - flip * 9 - 1, y - 1 + strand * 2, 3, 2);
   }
   ctx.fillStyle = '#ffe9a8';
-  ctx.fillRect(headX + flip * 2 - 1, headY - 11, 2, 6);
+  ctx.fillRect(headX + flip * 2 - 1, headY - 12, 2, 6);
   ctx.globalAlpha = 1;
 }
 
-// Four bracket segments make a crisp circular crosshair without introducing
-// antialiased vector edges into the pixel-art scene.
+/**
+ * One continuous beam, not a row of beads: an additive halo underneath so it
+ * reads as light rather than as a painted stripe, then the solid beam with the
+ * spectrum scrolling away down its length, then a white core hot enough to
+ * blow out. The muzzle flare at the horn sells the unicorn as the source.
+ */
 function drawLaser(playerX, playerY) {
   if (!laser.active) return;
-  const colours = ['#f16b9a', '#ffc55c', '#fff3a6', '#68d48b', '#62b8ed', '#9c78df'];
-  ctx.globalAlpha = 0.9;
-  for (let distance = 13, stripe = 0; distance < LASER_REACH; distance += 5, stripe++) {
-    const x = pixelX(playerX + laser.directionX * distance);
-    const y = pixelY(playerY + laser.directionY * distance);
-    ctx.fillStyle = '#342d4b';
-    ctx.fillRect(x - 3, y - 3, 7, 7);
-    ctx.fillStyle = colours[stripe % colours.length];
-    ctx.fillRect(x - 2, y - 2, 5, 5);
-    ctx.fillStyle = '#fffaf0';
-    ctx.fillRect(x, y, 1, 1);
-  }
+  const direction = [laser.directionX, laser.directionY];
+  ctx.globalCompositeOperation = 'lighter';
+  ctx.globalAlpha = 0.03;
+  drawBeam(playerX, playerY, ...direction, 11, LASER_REACH, [[15, '#5a4478']]);
+  ctx.globalCompositeOperation = 'source-over';
   ctx.globalAlpha = 1;
+  drawBeam(
+    playerX, playerY, ...direction, 11, LASER_REACH,
+    [[9, INK], [7, RAINBOW], [3, HOT]], gameTime * 26,
+  );
+  // Far enough out along the beam to sit at the horn rather than the chest: a
+  // flare centred on the body simply erases the unicorn behind it.
+  const muzzleX = pixelX(playerX + laser.directionX * 16);
+  const muzzleY = pixelY(playerY + laser.directionY * 16);
+  ctx.fillStyle = HOT;
+  ctx.fillRect(muzzleX - 3, muzzleY - 3, 7, 7);
 }
 
+/**
+ * The horn sweep. A tail chasing the leading edge round the arc is what makes
+ * a single stationary sprite read as a swing, and the blade is built up in
+ * layers — one ink backing for the whole crescent, the spectrum across it, a
+ * white core through its thickest part — rather than as separate outlined
+ * stamps, which is the difference between a blade and a string of beads.
+ */
 function drawAttack(playerX, playerY) {
   if (!attack.time) return;
   const progress = 1 - attack.time / ATTACK_DURATION;
-  const visible = Math.min(1, progress * 2.8);
-  const segments = 20;
-  const count = Math.max(1, Math.ceil(segments * visible));
-  const centre = Math.atan2(attack.directionY, attack.directionX);
-  const start = centre - ATTACK_ARC / 2;
-  const radius = ATTACK_REACH - 12 + progress * 8;
-  const colours = ['#f16b9a', '#ffc55c', '#fff3a6', '#68d48b', '#62b8ed', '#9c78df'];
-  ctx.globalAlpha = Math.min(1, attack.time / 0.055);
-
-  // Closely-spaced square stamps form a chunky crescent and communicate the
-  // broad multi-target hit area without relying on an animated unicorn frame.
-  for (let i = 0; i < count; i++) {
-    const amount = i / (segments - 1);
-    const angle = start + ATTACK_ARC * amount;
-    const x = pixelX(playerX + Math.cos(angle) * radius);
-    const y = pixelY(playerY + Math.sin(angle) * radius);
-    ctx.fillStyle = '#342d4b';
-    ctx.fillRect(x - 3, y - 3, 7, 7);
-    ctx.fillStyle = colours[i % colours.length];
-    ctx.fillRect(x - 2, y - 2, 5, 5);
-  }
+  const lead = Math.min(1, progress * 2.4);
+  ctx.globalAlpha = Math.min(1, attack.time / 0.05);
+  drawCrescent(
+    playerX, playerY, ATTACK_REACH - 15 + progress * 11,
+    Math.atan2(attack.directionY, attack.directionX), ATTACK_ARC,
+    Math.max(0, lead - 0.75), lead, 7,
+    [[3, INK], [1, RAINBOW], [-3, HOT]],
+  );
   ctx.globalAlpha = 1;
 }
 
+/**
+ * Four one-pixel ticks and a dot. A reticle competes with the scene for the
+ * player's attention, so it is drawn as thin as it can be and still be found;
+ * a dark copy offset by a pixel is cheaper than outlining every tick and is
+ * enough contrast over both pale stone and dark water.
+ */
 function drawAimMarker(aimX, aimY) {
   const x = pixelX(aimX);
   const y = pixelY(aimY);
-  ctx.fillStyle = '#342d4b';
-  ctx.fillRect(x - 4, y - 8, 8, 3);
-  ctx.fillRect(x - 4, y + 5, 8, 3);
-  ctx.fillRect(x - 8, y - 4, 3, 8);
-  ctx.fillRect(x + 5, y - 4, 3, 8);
-  ctx.fillStyle = '#f16b9a';
-  ctx.fillRect(x - 3, y - 7, 6, 1);
-  ctx.fillRect(x - 3, y + 6, 6, 1);
-  ctx.fillRect(x - 7, y - 3, 1, 6);
-  ctx.fillRect(x + 6, y - 3, 1, 6);
-  ctx.fillStyle = '#fff3a6';
-  ctx.fillRect(x - 1, y - 1, 3, 3);
+  // Closing in while firing, and warming once there is charge to spend, makes
+  // the marker report the laser's state without adding anything to the HUD.
+  // Its colour is the unicorn's own magic rather than a neutral white, because
+  // a pale marker vanishes into the pale stone that covers most of the ruins —
+  // leaving only its dark backing behind, which reads as grit on the screen.
+  const reach = laser.active ? 5 : 8;
+  for (const [shift, colour] of [[1, INK], [0, laser.charge ? '#ffe08a' : RAINBOW[0]]]) {
+    ctx.fillStyle = colour;
+    ctx.fillRect(x + shift, y - reach - 2 + shift, 1, 3);
+    ctx.fillRect(x + shift, y + reach + shift, 1, 3);
+    ctx.fillRect(x - reach - 2 + shift, y + shift, 3, 1);
+    ctx.fillRect(x + reach + shift, y + shift, 3, 1);
+    ctx.fillRect(x + shift, y + shift, 1, 1);
+  }
 }
 
 /**

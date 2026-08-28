@@ -130,6 +130,10 @@ function bakeCanvas() {
   };
 }
 
+// Pointer-driven actions live on the canvas rather than the window, so the
+// preview has to record its listeners too or attacks and the laser — the two
+// effects most in need of looking at — can never be made to fire.
+const canvasListeners = {};
 const canvas = {
   width: WIDTH,
   height: HEIGHT,
@@ -137,7 +141,7 @@ const canvas = {
   clientHeight: HEIGHT,
   getContext: () => surface.context,
   getBoundingClientRect: () => ({ left: 0, top: 0 }),
-  addEventListener() {},
+  addEventListener: (type, handler) => { (canvasListeners[type] ||= []).push(handler); },
 };
 const hud = { dataset: {}, setAttribute() {}, addEventListener() {} };
 
@@ -167,8 +171,26 @@ const cropArgs = options.crop;
 for (const code of (options.hold || '').split(',').filter(Boolean)) {
   for (const handler of listeners.keydown || []) handler({ code, repeat: false, preventDefault() {} });
 }
+
+const [aimX = WIDTH / 2, aimY = HEIGHT / 2 + 120] = (options.aim || '').split(',').map(Number);
+const pointerEvent = button => ({ button, clientX: aimX, clientY: aimY, preventDefault() {} });
+const firePointer = (type, button) => {
+  for (const handler of (canvasListeners[type] || listeners[type] || [])) handler(pointerEvent(button));
+};
+// Aim is a pointer position, so it must be set even for frames that never
+// click; without it the unicorn faces its last movement direction instead.
+if (options.aim) firePointer('pointermove', 0);
+
 // Let the encounter run long enough for enemies to leave their spawn pose.
-for (let frame = 0; frame < Number(options.frames || 150); frame++) {
+// A list, because the laser only fires once melee hits have charged it: there
+// is no way to preview the beam without landing several attacks first.
+// Filtered before Number, because ''.split(',') yields [''] and Number('') is
+// 0 — which silently fired an attack on frame 0 of every preview.
+const attackAt = new Set((options.attack || '').split(',').filter(Boolean).map(Number));
+const totalFrames = Number(options.frames || 150);
+for (let frame = 0; frame < totalFrames; frame++) {
+  if (attackAt.has(frame)) firePointer('pointerdown', 0);
+  if (options.laser && frame === totalFrames - Number(options.laser)) firePointer('pointerdown', 2);
   const next = scheduled;
   scheduled = null;
   now += 1000 / 60;

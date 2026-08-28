@@ -6,30 +6,34 @@ html,body,#game{width:100%;height:100%;margin:0;overflow:hidden;background:#0b16
 /* Wordless, icon-and-pip readout. Discrete cells report an exact resource at a
    glance where a continuous bar only reports "some", and dropping the labels
    keeps the frame's only text out of a pixel-art scene. */
-.hud{position:absolute;left:18px;top:18px;display:grid;gap:6px;padding:9px 10px;background:#0d1b20e6;border-top:1px solid #2e4a50;box-shadow:0 3px 0 #060f13;pointer-events:none}
-.hud__stat{display:grid;grid-template-columns:9px 58px;align-items:center;gap:8px}
-.hud__stat::before{content:"";display:block;height:9px}
+.hud{position:absolute;left:16px;top:16px;display:grid;gap:5px;padding:8px 10px 9px;background:#0c181de0;box-shadow:inset 0 1px 0 #4b757c,0 2px 0 #050d10;pointer-events:none}
+.hud__stat{display:grid;grid-template-columns:11px 58px;align-items:center;gap:9px}
+/* Each glyph sits in an outlined well. That is how the reference HUD tells a
+   glyph apart from its readout without spending a text label on it. */
+.hud__stat::before{content:"";display:block;height:11px;border:1px solid #4b757c}
 .hud__label{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%)}
-.hud__track{display:block;height:8px}
+.hud__track{display:block;height:9px}
 .hud__fill{display:block;height:100%;width:0}
 
 /* Health reads as five wide cells; the rainbow charge as ten fine ones. Both
    the empty track and the fill are the same repeating cell pattern, so a fill
-   width always lands on a cell boundary rather than clipping one in half. */
-.hud__stat--health::before{background:#f16b9a}
-.hud__stat--health .hud__track{background:repeating-linear-gradient(90deg,#2b3f45 0 9px,transparent 9px 12px)}
-.hud__stat--health .hud__fill{background:repeating-linear-gradient(90deg,#f16b9a 0 9px,transparent 9px 12px)}
+   width always lands on a cell boundary rather than clipping one in half.
+   Health is the cold cyan the reference HUD uses, which also leaves the whole
+   warm half of the palette to mean rainbow and nothing else. */
+.hud__stat--health::before{background:#5ff2dd}
+.hud__stat--health .hud__track{background:repeating-linear-gradient(90deg,#25404a 0 9px,transparent 9px 12px)}
+.hud__stat--health .hud__fill{background:repeating-linear-gradient(90deg,#5ff2dd 0 9px,transparent 9px 12px)}
 .hud[data-health="1"] .hud__stat--health .hud__fill{width:9px}
 .hud[data-health="2"] .hud__stat--health .hud__fill{width:21px}
 .hud[data-health="3"] .hud__stat--health .hud__fill{width:33px}
 .hud[data-health="4"] .hud__stat--health .hud__fill{width:45px}
 .hud[data-health="5"] .hud__stat--health .hud__fill{width:57px}
 
-.hud__stat--laser::before{background:linear-gradient(135deg,#f16b9a,#ffc55c,#68d48b,#62b8ed,#9c78df)}
-.hud__stat--laser .hud__track{background:repeating-linear-gradient(90deg,#2b3f45 0 4px,transparent 4px 6px)}
+.hud__stat--laser::before{background:linear-gradient(135deg,#ff7ab0,#ffc55c,#8ce6a0,#6fc8f5,#b48cf0)}
+.hud__stat--laser .hud__track{background:repeating-linear-gradient(90deg,#25404a 0 4px,transparent 4px 6px)}
 /* The rainbow is sized to the whole track, not to the fill, so each cell keeps
    its own colour as the charge grows instead of resqueezing the spectrum. */
-.hud__stat--laser .hud__fill{background:linear-gradient(90deg,#f16b9a,#ffc55c,#fff3a6,#68d48b,#62b8ed,#9c78df);background-size:58px 100%;mask:repeating-linear-gradient(90deg,#000 0 4px,transparent 4px 6px)}
+.hud__stat--laser .hud__fill{background:linear-gradient(90deg,#ff7ab0,#ffc55c,#fff3a6,#8ce6a0,#6fc8f5,#b48cf0);background-size:58px 100%;mask:repeating-linear-gradient(90deg,#000 0 4px,transparent 4px 6px)}
 .hud[data-laser="1"] .hud__stat--laser .hud__fill{width:4px}
 .hud[data-laser="2"] .hud__stat--laser .hud__fill{width:10px}
 .hud[data-laser="3"] .hud__stat--laser .hud__fill{width:16px}
