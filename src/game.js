@@ -62,9 +62,9 @@ const HOT = '#fffdf2';
 // Whatever is animating the rubble. Violet at rest, magenta once roused: it is
 // the only saturated colour anywhere on a Construct, so aggro reads instantly.
 const MAGIC_HOT = '#ffd9f5';
-// The ruins' own stone, lit to shadowed. Constructs are built out of this so
-// one standing in a collapsed temple is plainly made of that temple.
-const STONE = ['#b2bea6', '#96a590', '#687c74', '#3b5453'];
+// Floor-slab light, body, carving and wall shadow. Constructs look torn from
+// the same temple tiles rather than assembled from generic grey machinery.
+const STONE = ['#dbd8bf', '#cbc8b0', '#969584', '#687c74'];
 const TAIL_SEGMENTS = 8;
 
 let screenWidth = 1;
@@ -769,19 +769,6 @@ function drawImpact(x, y, time, duration, colour) {
   ctx.globalAlpha = 1;
 }
 
-/** Stacked rows of shrinking width; the cheapest way to get a hard-edged
- * diamond out of axis-aligned fills, and geometric silhouettes are most of
- * what makes the Constructs read as machines rather than blobs. Starting part
- * way down the shape shades only its lower half, which is how the prism gets a
- * lit side without a second pass of geometry. */
-function drawDiamond(x, y, radius, step, colour, fromRow = -radius) {
-  ctx.fillStyle = colour;
-  for (let row = fromRow; row < radius; row += step) {
-    const half = radius - Math.abs(row + step / 2);
-    ctx.fillRect(x - half, y + row, half * 2, step);
-  }
-}
-
 /**
  * Health as pips over an actor, and nothing at all while it is untouched.
  * Damage is the only moment the number matters, so a fight nobody has landed a
@@ -824,108 +811,91 @@ function drawEnemy(enemy, x, y) {
   x = pixelX(x);
   y = pixelY(y);
   const core = enemy.mode === 1 ? '#ff4ad4' : '#8a4ce0';
-  // The shadow and the motes sit outside the sprite and belong to neither fade,
-  // so both are drawn before the hurt and death alphas rather than resetting
-  // them — an alpha reset here once silently wiped the hurt flash.
-  drawShadow(x, y + 12, enemy.type ? 9 : 11);
+  // Atmosphere remains visible while the body flashes or dies.
+  drawShadow(x, y + 12, enemy.type ? 13 : 16);
   if (enemy.health) drawMagicMotes(x, y, enemy.id, core);
   if (!enemy.health) ctx.globalAlpha = Math.max(0, enemy.death / 0.24);
   else if (enemy.hurt && (enemy.hurt * 24 | 0) & 1) ctx.globalAlpha = 0.35;
 
   if (!enemy.type) {
-    // A cairn of broken masonry that the magic both holds up and holds
-    // together. Each stone is offset from the one under it and the whole upper
-    // stack drifts against the base, so the pile never lines up into a chassis.
-    // A loose heap of masonry with nothing holding it up but what burns in the
-    // gaps. Every stone's size and offset comes from the hash, so each
-    // Construct is a different pile of the same rubble at no cost in level
-    // data — and a hashed heap never resolves into the tidy stack of trays
-    // that hand-placed blocks kept collapsing into however they were shaded.
-    const drift = Math.round(Math.sin(gameTime * 1.9 + enemy.id) * 1.5);
-    const stoneAt = stone => {
-      const spot = hash(enemy.id, stone, 23);
-      // Sizes range wide on purpose — small chips alongside whole blocks —
-      // because stones of one size, roughly centred, read as a stack of slabs
-      // however they are shaded. But the offset stays inside half the smallest
-      // width, so every stone still covers the centre column and the heap
-      // holds together: jitter free enough to break that let the pile come
-      // apart into scattered debris with the sky showing through it.
-      const width = 7 + spot % 7;
-      return [
-        x - (width >> 1) + (spot >>> 8) % 5 - 2,
-        y + 7 - stone * 3 + (stone > 3 ? drift : 0),
-        width, 4 + (spot >>> 4) % 4, spot,
-      ];
-    };
-    // Chips that have come loose and hang in the field regardless. Rubble that
-    // plainly should have fallen and has not says "something is holding this
-    // up" more directly than any amount of shading on the pile itself.
-    for (let chip = 0; chip < 2; chip++) {
-      const spin = gameTime * 0.7 + chip * 3.1 + enemy.id;
-      const chipX = x + Math.round(Math.cos(spin) * 11);
-      const chipY = y - 4 + Math.round(Math.sin(spin) * 7);
-      ctx.fillStyle = STONE_INK;
-      ctx.fillRect(chipX - 2, chipY - 2, 5, 5);
-      ctx.fillStyle = STONE[1];
-      ctx.fillRect(chipX - 1, chipY - 1, 3, 3);
-    }
-    // All the ink before any of the stone, so the heap carries one outline and
-    // the joins between stones show only where their faces fail to meet.
-    // Outlining each stone as it is drawn fences them into separate bricks.
+    // A floor guardian: four broken feet carry one broad carved slab. The
+    // single shell silhouette gives it the weight the old stack of chips lost,
+    // while the temple-tile glyph makes its origin readable at game scale.
+    const stagger = hash(enemy.id, 4, 23) % 3 - 1;
     ctx.fillStyle = STONE_INK;
-    for (let stone = 0; stone < 7; stone++) ctx.fillRect(...stoneAt(stone));
-    for (let stone = 0; stone < 7; stone++) {
-      const [stoneX, stoneY, width, height, spot] = stoneAt(stone);
-      // Lit at the top of the heap and sinking into shadow at the ground, the
-      // same light the ruins are lit by, with a hashed bit nudging individual
-      // stones a step darker so neighbours never come out the same tone.
-      ctx.fillStyle = STONE[(stone > 4 ? 0 : stone > 2 ? 1 : 2) + (spot & 1)];
-      ctx.fillRect(stoneX + 1, stoneY + 1, width - 2, height - 2);
-    }
-    // Magic in the joins, on alternate stones only and well off the brightness
-    // of the eye. Lighting every seam frosts the whole heap pink and leaves
-    // the eye nothing to be brighter than.
+    ctx.fillRect(x - 18, y - 7 + stagger, 7, 7);
+    ctx.fillRect(x + 11, y - 7 - stagger, 7, 7);
+    ctx.fillRect(x - 18, y + 5 - stagger, 7, 7);
+    ctx.fillRect(x + 11, y + 5 + stagger, 7, 7);
+    ctx.fillStyle = STONE[3];
+    ctx.fillRect(x - 17, y - 6 + stagger, 5, 5);
+    ctx.fillRect(x + 12, y - 6 - stagger, 5, 5);
+    ctx.fillRect(x - 17, y + 6 - stagger, 5, 5);
+    ctx.fillRect(x + 12, y + 6 + stagger, 5, 5);
+
+    // Overlapping rectangles make a one-pixel outlined octagonal shell.
+    ctx.fillStyle = STONE_INK;
+    ctx.fillRect(x - 12, y - 12, 24, 24);
+    ctx.fillRect(x - 15, y - 9, 30, 18);
+    ctx.fillStyle = STONE[1];
+    ctx.fillRect(x - 11, y - 11, 22, 22);
+    ctx.fillRect(x - 14, y - 8, 28, 16);
+    ctx.fillStyle = STONE[3];
+    ctx.fillRect(x - 14, y + 3, 28, 5);
+    ctx.fillRect(x - 11, y + 8, 22, 3);
+    ctx.fillStyle = STONE[0];
+    ctx.fillRect(x - 10, y - 10, 20, 2);
+
+    // A miniature version of the floor's inset-square carving, split by the
+    // violet force that lifted the tile out of the ruin.
+    ctx.fillStyle = STONE[2];
+    ctx.fillRect(x - 8, y - 6, 16, 1);
+    ctx.fillRect(x - 8, y + 6, 16, 1);
+    ctx.fillRect(x - 8, y - 5, 1, 11);
+    ctx.fillRect(x + 7, y - 5, 1, 11);
     ctx.fillStyle = enemy.mode === 1 ? '#a02a86' : '#4e2a86';
-    for (let stone = 1; stone < 7; stone += 2) {
-      const [stoneX, stoneY, width] = stoneAt(stone);
-      ctx.fillRect(stoneX + 2, stoneY, width - 4, 1);
-    }
-    // Where it pools thickest, sunk into a socket so it burns out of the stone
-    // rather than sitting on it. This is the heap's only concentrated glow, so
-    // it is where the thing reads as looking from — no visor required.
-    const gaze = hash(enemy.id, 9, 5) % 3 - 1;
+    ctx.fillRect(x - 7, y, 4, 1);
+    ctx.fillRect(x + 3, y, 5, 1);
     ctx.fillStyle = STONE_INK;
-    ctx.fillRect(x - 3 + gaze, y - 7 + drift, 7, 5);
+    ctx.fillRect(x - 3, y - 3, 7, 7);
     ctx.fillStyle = core;
-    ctx.fillRect(x - 2 + gaze, y - 6 + drift, 5, 3);
+    ctx.fillRect(x - 2, y - 2, 5, 5);
     ctx.fillStyle = MAGIC_HOT;
-    ctx.fillRect(x + gaze, y - 5 + drift, 2, 1);
+    ctx.fillRect(x, y - 1, 2, 2);
   } else {
-    // Two halves of a shattered keystone floating apart on the magic burning
-    // in the break, which widens and narrows as it hangs. The lens the shot
-    // leaves from is that same break at its hottest point.
-    y += Math.round(Math.sin(gameTime * 2.4 + enemy.id) * 2) - 6;
-    // The lower half is drawn offset from the upper, so the keystone reads as
-    // broken clean across and slipped, hanging where the magic in the break
-    // holds it. The slip is what makes it stone; a seam alone made it a lid.
-    const split = 1 + (Math.sin(gameTime * 1.7 + enemy.id) > 0 ? 1 : 0);
-    const slip = Math.round(Math.sin(gameTime * 1.1 + enemy.id) * 1.5);
-    drawDiamond(x, y, 13, 1, STONE_INK);
-    drawDiamond(x, y, 12, 1, STONE[0]);
-    drawDiamond(x + slip, y + split, 13, 1, STONE_INK, 1);
-    drawDiamond(x + slip, y + split, 12, 1, STONE[2], 2);
-    // Kept thin: a bar across the full width reads as a display panel set into
-    // the stone rather than as the stone having come apart.
+    // A ranged shrine: an upright tile on a deep plinth, not the old paper-thin
+    // diamond. It still floats, but now has a crown, front face and underside.
+    y += Math.round(Math.sin(gameTime * 2.4 + enemy.id) * 2) - 5;
+    ctx.fillStyle = STONE_INK;
+    ctx.fillRect(x - 11, y - 12, 22, 22);
+    ctx.fillRect(x - 14, y - 8, 28, 15);
+    ctx.fillRect(x - 15, y + 6, 30, 8);
+    ctx.fillStyle = STONE[1];
+    ctx.fillRect(x - 10, y - 11, 20, 20);
+    ctx.fillRect(x - 13, y - 7, 26, 13);
+    ctx.fillStyle = STONE[3];
+    ctx.fillRect(x - 13, y + 2, 26, 4);
+    ctx.fillRect(x - 14, y + 7, 28, 6);
+    ctx.fillStyle = STONE[0];
+    ctx.fillRect(x - 9, y - 10, 18, 2);
+    ctx.fillRect(x - 12, y - 7, 24, 1);
+    ctx.fillRect(x - 10, y + 7, 20, 1);
+    ctx.fillStyle = STONE[2];
+    ctx.fillRect(x - 7, y - 5, 14, 1);
+    ctx.fillRect(x - 7, y + 1, 14, 1);
+    ctx.fillRect(x - 7, y - 4, 1, 5);
+    ctx.fillRect(x + 6, y - 4, 1, 5);
+    // The eye sits in the floor glyph's centre and is also the shot aperture.
+    ctx.fillStyle = STONE_INK;
+    ctx.fillRect(x - 4, y - 4, 9, 7);
     ctx.fillStyle = core;
-    ctx.fillRect(x - 7, y - 1, 14, split + 1);
+    ctx.fillRect(x - 3, y - 3, 7, 5);
     ctx.fillStyle = MAGIC_HOT;
-    ctx.fillRect(x - 2, y - 1, 5, split + 1);
+    ctx.fillRect(x - 1, y - 2, 3, 2);
   }
 
   ctx.globalAlpha = 1;
-  if (enemy.health) {
-    drawPips(x, y - (enemy.type ? 19 : 25), enemy.health, enemy.type ? 2 : 3, core);
-  }
+  if (enemy.health) drawPips(x, y - 23, enemy.health, enemy.type ? 2 : 3, core);
 }
 
 function drawProjectiles(alpha) {
@@ -1135,7 +1105,7 @@ function drawLightShafts(bounds) {
     // offset and the occasional skip keeps the sky feeling broken up.
     const variation = hash(index, 7, 31);
     if (variation % 4 === 0) continue;
-    const width = 30 + variation % 74;
+    const width = 40 + variation % 84;
     const originX = index * SHAFT_SPACING + variation % 97;
     // A wide diffuse halo, then a brighter core inside it.
     for (const [span, inset, alpha] of [[width, 0, 0.03], [width / 2, width / 4, 0.04]]) {
@@ -1185,7 +1155,7 @@ function buildGrade() {
   // then a hard fall into cool shadow only once it reaches the frame.
   grade.addColorStop(0, '#fffaec');
   grade.addColorStop(0.6, '#f0ecd6');
-  grade.addColorStop(1, '#1e3944');
+  grade.addColorStop(1, '#334b53');
 }
 
 function draw() {

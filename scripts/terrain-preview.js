@@ -35,7 +35,7 @@ function crop(image, x0, y0, width, height) {
 const SHAFT_SPACING = 232;
 const SHAFT_SKIP = 4;
 const SHAFT_SKEW = 0.55;
-const GRADE_STOPS = [[0, [255, 250, 236]], [0.6, [240, 236, 214]], [1, [30, 57, 68]]];
+const GRADE_STOPS = [[0, [255, 250, 236]], [0.6, [240, 236, 214]], [1, [51, 75, 83]]];
 const GRADE_INNER = 0.3;
 
 function gradeAt(distance) {
@@ -61,7 +61,7 @@ function atmosphere(pixels, width, height, worldX, worldY) {
     for (const slotIndex of [slot - 1, slot]) {
       const variation = terrainHash(slotIndex, 7, 31);
       if (variation % SHAFT_SKIP === 0) continue;
-      const span = 30 + variation % 74;
+      const span = 40 + variation % 84;
       const phase = shaftX - (slotIndex * SHAFT_SPACING + variation % 97);
       if (phase < 0 || phase >= span) continue;
       light += 0.03;
