@@ -1,5 +1,5 @@
 *{box-sizing:border-box}
-html,body,#game{width:100%;height:100%;margin:0;overflow:hidden;background:#183b64}
+html,body,#game{width:100%;height:100%;margin:0;overflow:hidden;background:#0b161b}
 #game{height:100dvh;position:relative}
 #c{display:block;width:100%;height:100%;outline:0;touch-action:none;image-rendering:pixelated;cursor:crosshair}
 .hud{position:absolute;left:18px;top:18px;display:grid;gap:9px;width:132px;padding:11px 13px;background:#18233ddd;box-shadow:0 3px 0 #0d1729;color:#fff3a6;font:700 9px/1 system-ui,sans-serif;letter-spacing:.1em;pointer-events:none}

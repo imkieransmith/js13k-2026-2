@@ -42,6 +42,8 @@ const AIM_DISTANCE = 144;
 const AIM_MARGIN = 9;
 const BASE_ZOOM = 2;
 const FIXED_STEP = 1 / 120;
+const SHAFT_SPACING = 232;
+const SHAFT_SKEW = 0.55;
 
 let screenWidth = 1;
 let screenHeight = 1;
@@ -53,6 +55,7 @@ let accumulator = 0;
 let renderScale = 1;
 let renderOffsetX = 0;
 let renderOffsetY = 0;
+let grade = null;
 
 const player = {
   x: level.player[0],
@@ -154,6 +157,7 @@ function resize() {
   viewWidth = screenWidth / zoom;
   viewHeight = screenHeight / zoom;
   ctx.imageSmoothingEnabled = false;
+  buildGrade();
   clampCamera();
   // A resize is an instantaneous change of view, not simulation movement.
   // Syncing both samples prevents interpolation from the old camera limits.
@@ -585,6 +589,16 @@ function visibleBounds(cameraX, cameraY) {
   };
 }
 
+// A translucent stepped blob, not an opaque rectangle: the surface underneath
+// stays readable, so the same shadow works on grass, stone and water.
+function drawShadow(x, y, radius) {
+  ctx.globalAlpha = 0.42;
+  ctx.fillStyle = '#0b171c';
+  ctx.fillRect(x - radius, y - 2, radius * 2, 4);
+  ctx.fillRect(x - radius + 3, y - 4, radius * 2 - 6, 8);
+  ctx.globalAlpha = 1;
+}
+
 function drawEnemyTelegraph(enemy, x, y) {
   const hitFlash = !enemy.type && enemy.attackEffect > 0;
   if (enemy.windup <= 0 && !hitFlash) return;
@@ -666,8 +680,7 @@ function drawEnemy(enemy, x, y) {
   if (!enemy.health) ctx.globalAlpha = Math.max(0, enemy.death / 0.24);
   else if (enemy.hurt && (enemy.hurt * 24 | 0) & 1) ctx.globalAlpha = 0.35;
   const alert = enemy.mode === 1;
-  ctx.fillStyle = '#38664e';
-  ctx.fillRect(x - 9, y + 10, 18, 4);
+  drawShadow(x, y + 12, 10);
 
   if (!enemy.type) {
     // A low stone cube on four dark legs reads as an ancient crab-like guard.
@@ -725,9 +738,8 @@ function drawPlayer(playerX, playerY) {
 
   const x = pixelX(playerX);
   const y = pixelY(playerY);
+  drawShadow(x, y + 12, 9);
   ctx.globalAlpha = player.invulnerability && (player.invulnerability * 24 | 0) & 1 ? 0.35 : 1;
-  ctx.fillStyle = '#38664e';
-  ctx.fillRect(x - 8, y + 10, 16, 4);
   ctx.fillStyle = '#342d4b';
   ctx.fillRect(x - 11, y - 13, 22, 26);
   ctx.fillStyle = player.dashTime ? '#fff3a6' : '#fffaf0';
@@ -798,6 +810,54 @@ function drawAimMarker(aimX, aimY) {
   ctx.fillRect(x - 1, y - 1, 3, 3);
 }
 
+/**
+ * Diagonal shafts of light, drawn in world space so they belong to the place
+ * rather than sliding across the lens. Each shaft is stepped in 4-unit slices
+ * instead of being a rotated rectangle, which keeps its edge on the pixel grid
+ * and out of the antialiaser.
+ */
+function drawLightShafts(bounds) {
+  const top = Math.floor(bounds.top);
+  const bottom = Math.ceil(bounds.bottom);
+  const first = Math.floor((bounds.left - bottom * SHAFT_SKEW) / SHAFT_SPACING) - 1;
+  const last = Math.ceil((bounds.right - top * SHAFT_SKEW) / SHAFT_SPACING);
+  ctx.globalCompositeOperation = 'lighter';
+  ctx.fillStyle = '#fff0c8';
+  for (let index = first; index <= last; index++) {
+    // Evenly spaced shafts tile like wallpaper. Hashing the slot for width,
+    // offset and the occasional skip keeps the sky feeling broken up.
+    const variation = hash(index, 7, 31);
+    if (variation % 4 === 0) continue;
+    const width = 30 + variation % 74;
+    const originX = index * SHAFT_SPACING + variation % 97;
+    // A wide diffuse halo, then a brighter core inside it.
+    for (const [span, inset, alpha] of [[width, 0, 0.03], [width / 2, width / 4, 0.04]]) {
+      ctx.globalAlpha = alpha;
+      for (let y = top; y < bottom; y += 4) ctx.fillRect(originX + inset + y * SHAFT_SKEW, y, span, 4);
+    }
+  }
+  ctx.globalAlpha = 1;
+  ctx.globalCompositeOperation = 'source-over';
+}
+
+/**
+ * One multiply pass does both jobs the reference art leans on: it grades the
+ * whole frame onto a single warm-centre/cool-corner ramp, and it sinks the
+ * frame edges into shadow so the eye stays on the player.
+ */
+function buildGrade() {
+  const radius = Math.hypot(screenWidth, screenHeight) / 2;
+  grade = ctx.createRadialGradient(
+    screenWidth / 2, screenHeight / 2, radius * 0.3,
+    screenWidth / 2, screenHeight / 2, radius,
+  );
+  // Near-neutral through the play area so materials keep their own colour,
+  // then a hard fall into cool shadow only once it reaches the frame.
+  grade.addColorStop(0, '#fffaec');
+  grade.addColorStop(0.6, '#f0ecd6');
+  grade.addColorStop(1, '#1e3944');
+}
+
 function draw() {
   const dpr = devicePixelRatio || 1;
   const alpha = accumulator / FIXED_STEP;
@@ -808,7 +868,7 @@ function draw() {
   const aimX = aim.previousX + (aim.x - aim.previousX) * alpha;
   const aimY = aim.previousY + (aim.y - aim.previousY) * alpha;
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  ctx.fillStyle = '#183b64';
+  ctx.fillStyle = '#0b161b';
   ctx.fillRect(0, 0, screenWidth, screenHeight);
   renderScale = dpr * zoom;
   renderOffsetX = Math.round((screenWidth / 2 - cameraX * zoom) * dpr);
@@ -851,7 +911,16 @@ function draw() {
     if (actor.enemy) drawImpact(actor.x, actor.y, actor.enemy.hitEffect, 0.16, '#fff3a6');
   }
   drawImpact(playerX, playerY, player.hitEffect, 0.18, '#e94863');
+  drawLightShafts(bounds);
   drawAimMarker(aimX, aimY);
+
+  // The grade is a lens effect, so it is applied in screen space after the
+  // world transform is finished with. The HUD lives in the DOM and is spared.
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.globalCompositeOperation = 'multiply';
+  ctx.fillStyle = grade;
+  ctx.fillRect(0, 0, screenWidth, screenHeight);
+  ctx.globalCompositeOperation = 'source-over';
 }
 
 function frame(now) {

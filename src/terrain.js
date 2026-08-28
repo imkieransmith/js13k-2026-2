@@ -358,29 +358,112 @@ export function moveOnTerrain(level, body, dx, dy, radius) {
   return blocked;
 }
 
-const RGB = [
-  [23, 45, 63],
-  [73, 157, 72],
-  [133, 96, 64],
-  [45, 139, 184],
-  [211, 216, 194],
+// One deliberately narrow ramp: a near-black teal void, olive-leaning greens
+// and warm cream stone. Keeping every material on the same warm/cool axis is
+// what makes the scene read as a single lit place rather than coloured shapes.
+export const RGB = [
+  [11, 22, 27],
+  [82, 137, 62],
+  [124, 88, 58],
+  [46, 146, 183],
+  [203, 200, 176],
 ];
 const NUMBER = { g: 1, d: 2, w: 3, f: 4, b: 5, s: 6 };
+// Elevated ground catches more light than the field it sits above.
+export const RAISED_LIFT = 13;
 
-function setPixel(image, x, y, colour) {
+/**
+ * Cut stone reads as a single carved mass lit from the north: a blown-out top
+ * lip, a face a full step down, and a body that falls almost to the void. The
+ * wide gap between lip and body is what gives the ruins their weight, so these
+ * are named rather than inlined and the smoke test asserts against the names.
+ */
+export const STONE = {
+  lip: [238, 236, 208],
+  side: [178, 190, 166],
+  face: [120, 139, 127],
+  mass: [59, 84, 83],
+  base: [26, 46, 49],
+  tread: [188, 197, 173],
+  riser: [101, 124, 118],
+};
+
+/**
+ * Shading is a single signed step applied along the palette's own axis, so a
+ * lit or shadowed material stays recognisably the same material.
+ */
+function setPixel(image, x, y, colour, lift = 0) {
   const index = (y * image.width + x) * 4;
-  image.data[index] = colour[0];
-  image.data[index + 1] = colour[1];
-  image.data[index + 2] = colour[2];
+  image.data[index] = colour[0] + lift;
+  image.data[index + 1] = colour[1] + lift * 1.15;
+  image.data[index + 2] = colour[2] + lift * 0.7;
   image.data[index + 3] = 255;
 }
 
-function fillRect(image, x, y, width, height, colour) {
+function fillRect(image, x, y, width, height, colour, lift) {
   const x0 = Math.max(0, x);
   const y0 = Math.max(0, y);
   const x1 = Math.min(image.width, x + width);
   const y1 = Math.min(image.height, y + height);
-  for (let py = y0; py < y1; py++) for (let px = x0; px < x1; px++) setPixel(image, px, py, colour);
+  for (let py = y0; py < y1; py++) for (let px = x0; px < x1; px++) setPixel(image, px, py, colour, lift);
+}
+
+/**
+ * Blend a cool shadow into materials already baked beneath the structure. Red
+ * is cut hardest and blue least, so shade drifts toward the void's teal rather
+ * than simply going grey - the strongest single cue that one light source lit
+ * the whole scene.
+ */
+function shadeRect(image, x, y, width, height) {
+  for (let py = Math.max(0, y); py < Math.min(image.height, y + height); py++) for (let px = Math.max(0, x); px < Math.min(image.width, x + width); px++) {
+    const index = (py * image.width + px) * 4;
+    image.data[index] = image.data[index] * 0.58;
+    image.data[index + 1] = image.data[index + 1] * 0.64;
+    image.data[index + 2] = image.data[index + 2] * 0.76;
+  }
+}
+
+// Boundary treatments: sunlit shallows, and the shaded lip where ground cover
+// laps over a slab.
+const WATER_RIM = [126, 205, 214];
+const GRASS_CONTACT = [46, 88, 46];
+
+// Amplitude per material: ground cover weathers hard, cut stone barely at all.
+const TONE_RANGE = [0, 10, 8, 11, 5];
+
+/**
+ * Value noise at three scales, each sampled through a jittered coordinate so
+ * the quantised cells never line up as a grid. Straight-sampled noise reads as
+ * a checkerboard; ragged patches read as weathering. Same displacement trick
+ * the material edges already use, reused here for surface tone.
+ *
+ * The widest octave is what stops a large field reading as a lawn: it drifts
+ * whole regions lighter or darker, so light and shade look like they belong to
+ * the landscape rather than to a texture laid over it. Its displacement has to
+ * be proportionally larger or its region borders show up as straight seams.
+ */
+function octave(x, y, shift, seed) {
+  // Displacement is sampled at an eighth of the cell and swings up to half of
+  // it, so every octave's grid dissolves at its own scale. A fixed jitter only
+  // ever hides the finest one and leaves the wider ones showing as squares.
+  const cell = 1 << shift;
+  const swing = cell * 3 >> 2;
+  const drift = terrainHash(x >> shift - 2, y >> shift - 2, seed);
+  return terrainHash(
+    x + drift % swing - (swing >> 1) >> shift,
+    y + (drift >>> 9) % swing - (swing >> 1) >> shift,
+    seed + 5,
+  ) % 3 - 1;
+}
+
+function tone(x, y, code, seed) {
+  // Weighted toward the widest octave on purpose: broad light and shade across
+  // the landscape is what a large field needs, not surface fizz. Amplitude
+  // stays low because quantised cells read as rectangles as soon as the
+  // contrast is high enough to notice - the drama belongs to the lighting.
+  const region = octave(x, y, 7, seed + 3);
+  const broad = octave(x, y, 5, seed + code);
+  return (region * 2 + broad) * TONE_RANGE[code] / 3;
 }
 
 function prepareLayers(level) {
@@ -408,36 +491,126 @@ function supportAt(level, support, x, y) {
   return index < 0 ? 0 : support[index];
 }
 
-function drawFloorDetails(image, level, slots, slot, tileX, tileY) {
+function drawFloorDetails(image, level, slots, slot, tileX, tileY, lift) {
   const index = tileIndex(level, tileX, tileY);
   if (slots[index * MAX_STACK_ENTRIES + slot] !== 4) return;
   const x = tileX * AUTHOR_TILE;
   const y = tileY * AUTHOR_TILE;
-  const colour = [170, 179, 167];
-  fillRect(image, x + 3, y + 1, AUTHOR_TILE - 7, 1, colour);
-  fillRect(image, x + 1, y + 3, 1, AUTHOR_TILE - 7, colour);
+  // A recessed grout line plus a catch of light on its far side gives the slab
+  // a carved edge instead of a drawn-on grid.
+  fillRect(image, x + 3, y, AUTHOR_TILE - 6, 1, [150, 149, 132], lift);
+  fillRect(image, x, y + 3, 1, AUTHOR_TILE - 6, [150, 149, 132], lift);
+  fillRect(image, x + 3, y + 1, AUTHOR_TILE - 6, 1, [219, 216, 191], lift);
+  fillRect(image, x + 1, y + 3, 1, AUTHOR_TILE - 6, [219, 216, 191], lift);
 }
 
-function drawDecoration(image, level, code, tileX, tileY, slot) {
+/**
+ * Props are silhouette-first: a dark contact blob anchors the object, a body
+ * only a shade above the void carries the shape, and one narrow rim of colour
+ * on top catches the same light as the raised ground.
+ */
+function drawDecoration(image, level, code, tileX, tileY, slot, lift) {
   const x = tileX * AUTHOR_TILE;
   const y = tileY * AUTHOR_TILE;
   const variant = terrainHash(tileX, tileY, level.seed + slot * 43);
   if (code === 5) {
     const offset = variant % 5 - 2;
-    fillRect(image, x + 5 + offset, y + 18, 22, 6, [35, 103, 50]);
-    fillRect(image, x + 9 + offset, y + 13, 14, 12, [53, 137, 60]);
+    const wide = variant >> 4 & 3;
+    fillRect(image, x + 4 + offset, y + 22, 24 + wide, 4, [17, 33, 30], lift);
+    fillRect(image, x + 5 + offset, y + 16, 22 + wide, 8, [23, 48, 40], lift);
+    fillRect(image, x + 8 + offset, y + 11, 15 + wide, 10, [30, 62, 46], lift);
+    fillRect(image, x + 10 + offset, y + 10, 10 + wide, 3, [58, 104, 60], lift);
   } else if (code === 6) {
     const offset = variant % 7 - 3;
-    fillRect(image, x + 10 + offset, y + 16, 13, 7, [126, 143, 137]);
-    fillRect(image, x + 13 + offset, y + 13, 8, 4, [190, 199, 181]);
+    fillRect(image, x + 9 + offset, y + 21, 16, 3, [24, 40, 40], lift);
+    fillRect(image, x + 10 + offset, y + 15, 14, 7, [118, 124, 111], lift);
+    fillRect(image, x + 12 + offset, y + 12, 9, 4, [196, 197, 172], lift);
   }
 }
 
-function drawBand(image, level, slots, support, upper = false) {
+/**
+ * Hash-placed micro detail. The reference art is dense at every scale, but a
+ * 32px authoring tile cannot express that without exploding the level data, so
+ * the surface earns its detail deterministically instead of storing it.
+ */
+function drawScatter(image, level, slots, support, lift) {
+  for (let tileY = 0; tileY < level.tileHeight; tileY++) for (let tileX = 0; tileX < level.tileWidth; tileX++) {
+    const index = tileY * level.tileWidth + tileX;
+    if (!support[index]) continue;
+    let code = 0;
+    let prop = false;
+    for (let slot = 0; slot < MAX_STACK_ENTRIES; slot++) {
+      const entry = slots[index * MAX_STACK_ENTRIES + slot];
+      if (entry > 4) prop = true;
+      else if (entry > 0) code = entry;
+    }
+    // Tiles carrying a prop are left alone; scatter runs after the slot loop
+    // and would otherwise stipple tufts across the bush it grows beside.
+    if (prop || (code !== 1 && code !== 4)) continue;
+    const count = terrainHash(tileX, tileY, level.seed + 311) % 4;
+    for (let i = 0; i < count; i++) {
+      const spot = terrainHash(tileX * 7 + i, tileY * 13 + i * 3, level.seed + 57);
+      const x = tileX * AUTHOR_TILE + spot % 27 + 2;
+      const y = tileY * AUTHOR_TILE + (spot >> 5) % 27 + 2;
+      if (code === 1) {
+        // Grass tufts: a dark blade cluster with one lit tip above it.
+        fillRect(image, x, y + 1, 3, 2, [40, 79, 43], lift);
+        fillRect(image, x + 1, y, 1, 2, [117, 172, 82], lift);
+      } else {
+        // Slabs chip and craze rather than sprout; single-pixel marks only.
+        fillRect(image, x, y, 1 + (spot >> 11 & 1), 1, [166, 163, 143], lift);
+        if (spot & 4096) fillRect(image, x + 1, y + 1, 1, 1, [225, 222, 198], lift);
+      }
+    }
+  }
+}
+
+/**
+ * Edge jitter reaches at most one tile, so a slot with nothing in the local
+ * neighbourhood cannot contribute a single pixel. Skipping those tiles is what
+ * keeps the bake affordable: a stack rarely fills more than two of its eight
+ * slots, but every slot used to cost a full pass over every supported tile.
+ */
+function slotUsedNear(level, slots, slot, tileX, tileY) {
+  for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+    const index = tileIndex(level, tileX + dx, tileY + dy);
+    if (index >= 0 && slots[index * MAX_STACK_ENTRIES + slot]) return true;
+  }
+  return false;
+}
+
+/**
+ * Rim lighting along material boundaries. Flat regions meeting at a hard edge
+ * read as cut paper; a bright shoreline on the water and a shaded contact line
+ * where ground cover laps over stone are what make the same two regions read
+ * as one surface lying on another. Needs the per-pixel material map, because
+ * the edges are jittered and no longer follow tile boundaries.
+ */
+function drawMaterialEdges(image, field, lift) {
+  const { width, height } = image;
+  for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) {
+    const index = y * width + x;
+    const code = field[index];
+    if (code !== 1 && code !== 3) continue;
+    const north = y ? field[index - width] : 0;
+    const south = y < height - 1 ? field[index + width] : 0;
+    const west = x ? field[index - 1] : 0;
+    const east = x < width - 1 ? field[index + 1] : 0;
+    if (code === 3) {
+      // Shallows catch the light all the way around the pool.
+      if (north !== 3 || south !== 3 || west !== 3 || east !== 3) setPixel(image, x, y, WATER_RIM, lift);
+    } else if (north === 4 || south === 4 || west === 4 || east === 4) {
+      setPixel(image, x, y, GRASS_CONTACT, lift);
+    }
+  }
+}
+
+function drawBand(image, level, slots, support, upper = false, field = null) {
+  if (field) field.fill(0);
   for (let slot = 0; slot < MAX_STACK_ENTRIES; slot++) {
     for (let tileY = 0; tileY < level.tileHeight; tileY++) for (let tileX = 0; tileX < level.tileWidth; tileX++) {
       const index = tileY * level.tileWidth + tileX;
-      if (!support[index]) continue;
+      if (!support[index] || !slotUsedNear(level, slots, slot, tileX, tileY)) continue;
       const strict = upper && (!supportAt(level, support, tileX - 1, tileY)
         || !supportAt(level, support, tileX + 1, tileY)
         || !supportAt(level, support, tileX, tileY - 1)
@@ -446,6 +619,7 @@ function drawBand(image, level, slots, support, upper = false) {
       const y0 = tileY * AUTHOR_TILE;
       const ownCode = slots[index * MAX_STACK_ENTRIES + slot];
       const spread = ownCode === 4 ? 2 : ownCode === 3 ? 4 : 6;
+      const base = upper ? RAISED_LIFT : 0;
       for (let y = y0; y < y0 + AUTHOR_TILE; y++) for (let x = x0; x < x0 + AUTHOR_TILE; x++) {
         let sampleX = x;
         let sampleY = y;
@@ -456,11 +630,38 @@ function drawBand(image, level, slots, support, upper = false) {
         const sampledTile = tileIndex(level, Math.floor(sampleX / AUTHOR_TILE), Math.floor(sampleY / AUTHOR_TILE));
         if (sampledTile < 0) continue;
         const code = slots[sampledTile * MAX_STACK_ENTRIES + slot];
-        if (code > 0 && code < 5) setPixel(image, x, y, RGB[code]);
+        if (code > 0 && code < 5) {
+          setPixel(image, x, y, RGB[code], base + tone(x, y, code, level.seed));
+          if (field) field[y * image.width + x] = code;
+        }
       }
-      if (ownCode === 4) drawFloorDetails(image, level, slots, slot, tileX, tileY);
-      else if (ownCode > 4) drawDecoration(image, level, ownCode, tileX, tileY, slot);
+      if (ownCode === 4) drawFloorDetails(image, level, slots, slot, tileX, tileY, base);
+      else if (ownCode > 4) drawDecoration(image, level, ownCode, tileX, tileY, slot, base);
     }
+  }
+  // Scatter rides above every material slot but below props, so a tuft never
+  // erases the bush it grows beside.
+  const lift = upper ? RAISED_LIFT : 0;
+  if (field) drawMaterialEdges(image, field, lift);
+  drawScatter(image, level, slots, support, lift);
+}
+
+function drawShadows(image, level, walls, stairs) {
+  const at = (field, x, y) => {
+    const index = tileIndex(level, x, y);
+    return index < 0 ? 0 : field[index];
+  };
+  for (let y = 0; y < level.tileHeight; y++) for (let x = 0; x < level.tileWidth; x++) {
+    const wall = at(walls, x, y);
+    const stair = at(stairs, x, y);
+    if (!wall && !stair) continue;
+    const worldX = x * AUTHOR_TILE;
+    const worldY = y * AUTHOR_TILE;
+    if (wall) {
+      const facade = !at(walls, x, y + 1) && !at(stairs, x, y + 1);
+      if (facade) shadeRect(image, worldX + 6, worldY + 64, AUTHOR_TILE, 12);
+      if (!at(walls, x + 1, y) && !at(stairs, x + 1, y)) shadeRect(image, worldX + 32, worldY + 6, 6, facade ? 64 : 32);
+    } else if (!at(stairs, x, y + 2)) shadeRect(image, worldX + 5, worldY + 64, AUTHOR_TILE, 6);
   }
 }
 
@@ -479,19 +680,19 @@ function drawWalls(image, level, walls, stairs) {
     // Stairs directly south continue the raised mass instead of exposing a
     // second Wall facade behind the staircase and pushing the platform back.
     const facade = !wallAt(x, y + 1) && !at(stairs, x, y + 1);
-    fillRect(image, worldX, worldY, AUTHOR_TILE, 32, [77, 102, 99]);
+    fillRect(image, worldX, worldY, AUTHOR_TILE, 32, STONE.mass);
     if (facade) {
-      fillRect(image, worldX, worldY, AUTHOR_TILE, 32, [123, 146, 137]);
-      fillRect(image, worldX, worldY + 32, AUTHOR_TILE, 31, [77, 102, 99]);
-      fillRect(image, worldX, worldY, AUTHOR_TILE, 3, [231, 232, 203]);
-      fillRect(image, worldX, worldY + 63, AUTHOR_TILE, 2, [46, 68, 70]);
+      fillRect(image, worldX, worldY, AUTHOR_TILE, 32, STONE.face);
+      fillRect(image, worldX, worldY + 32, AUTHOR_TILE, 31, STONE.mass);
+      fillRect(image, worldX, worldY, AUTHOR_TILE, 3, STONE.lip);
+      fillRect(image, worldX, worldY + 63, AUTHOR_TILE, 2, STONE.base);
     }
     // The back edge completes the raised perimeter; facade and side edges
     // below join it through convex and concave corners.
-    if (!wallAt(x, y - 1)) fillRect(image, worldX, worldY, AUTHOR_TILE, 3, [231, 232, 203]);
+    if (!wallAt(x, y - 1)) fillRect(image, worldX, worldY, AUTHOR_TILE, 3, STONE.lip);
     const height = facade ? 63 : 32;
-    if (!wallAt(x - 1, y)) fillRect(image, worldX, worldY, 3, height, [190, 201, 180]);
-    if (!wallAt(x + 1, y)) fillRect(image, worldX + AUTHOR_TILE - 3, worldY, 3, height, [190, 201, 180]);
+    if (!wallAt(x - 1, y)) fillRect(image, worldX, worldY, 3, height, STONE.side);
+    if (!wallAt(x + 1, y)) fillRect(image, worldX + AUTHOR_TILE - 3, worldY, 3, height, STONE.side);
   }
 }
 
@@ -500,15 +701,15 @@ function drawUpperEdges(image, level, support) {
     if (!supportAt(level, support, x, y)) continue;
     const worldX = x * AUTHOR_TILE;
     const worldY = y * AUTHOR_TILE;
-    if (!supportAt(level, support, x, y - 1)) fillRect(image, worldX, worldY, AUTHOR_TILE, 2, [238, 240, 207]);
+    if (!supportAt(level, support, x, y - 1)) fillRect(image, worldX, worldY, AUTHOR_TILE, 2, STONE.lip);
     if (!supportAt(level, support, x, y + 1)) {
-      fillRect(image, worldX, worldY + AUTHOR_TILE - 3, AUTHOR_TILE, 3, [238, 240, 207]);
-      fillRect(image, worldX, worldY + AUTHOR_TILE, AUTHOR_TILE, 3, [77, 101, 98]);
+      fillRect(image, worldX, worldY + AUTHOR_TILE - 3, AUTHOR_TILE, 3, STONE.lip);
+      fillRect(image, worldX, worldY + AUTHOR_TILE, AUTHOR_TILE, 3, STONE.mass);
     }
     // Full-height returns join across tile corners, so identical upper/lower
     // materials can never visually bleed through a dashed structural edge.
-    if (!supportAt(level, support, x - 1, y)) fillRect(image, worldX, worldY, 2, AUTHOR_TILE, [168, 187, 160]);
-    if (!supportAt(level, support, x + 1, y)) fillRect(image, worldX + AUTHOR_TILE - 2, worldY, 2, AUTHOR_TILE, [168, 187, 160]);
+    if (!supportAt(level, support, x - 1, y)) fillRect(image, worldX, worldY, 2, AUTHOR_TILE, STONE.side);
+    if (!supportAt(level, support, x + 1, y)) fillRect(image, worldX + AUTHOR_TILE - 2, worldY, 2, AUTHOR_TILE, STONE.side);
   }
 }
 
@@ -523,13 +724,13 @@ function drawStairs(image, level, stairs, walls) {
     const worldX = x * AUTHOR_TILE;
     const worldY = y * AUTHOR_TILE;
     for (let step = 0; step < 64; step += 8) {
-      fillRect(image, worldX, worldY + step, AUTHOR_TILE, 6, [190, 201, 180]);
-      fillRect(image, worldX, worldY + step, AUTHOR_TILE, 1, [238, 240, 207]);
-      fillRect(image, worldX, worldY + step + 6, AUTHOR_TILE, 2, [123, 146, 137]);
+      fillRect(image, worldX, worldY + step, AUTHOR_TILE, 6, STONE.tread);
+      fillRect(image, worldX, worldY + step, AUTHOR_TILE, 1, STONE.lip);
+      fillRect(image, worldX, worldY + step + 6, AUTHOR_TILE, 2, STONE.riser);
     }
-    if (!at(stairs, x - 1, y) && !at(walls, x - 1, y)) fillRect(image, worldX, worldY, 4, 64, [231, 232, 203]);
-    if (!at(stairs, x + 1, y) && !at(walls, x + 1, y)) fillRect(image, worldX + AUTHOR_TILE - 4, worldY, 4, 64, [77, 102, 99]);
-    if (!at(stairs, x, y + 2)) fillRect(image, worldX, worldY + 62, AUTHOR_TILE, 2, [46, 68, 70]);
+    if (!at(stairs, x - 1, y) && !at(walls, x - 1, y)) fillRect(image, worldX, worldY, 4, 64, STONE.lip);
+    if (!at(stairs, x + 1, y) && !at(walls, x + 1, y)) fillRect(image, worldX + AUTHOR_TILE - 4, worldY, 4, 64, STONE.mass);
+    if (!at(stairs, x, y + 2)) fillRect(image, worldX, worldY + 62, AUTHOR_TILE, 2, STONE.base);
   }
 }
 
@@ -541,9 +742,13 @@ export function buildTerrain(level, scale = CACHE_SCALE, canvas = document.creat
   const image = context.createImageData(canvas.width, canvas.height);
   for (let y = 0; y < image.height; y++) for (let x = 0; x < image.width; x++) setPixel(image, x, y, RGB[0]);
   const layers = prepareLayers(level);
-  drawBand(image, level, layers.ground, layers.groundSupport);
+  // One scratch material map, cleared per band. Reusing it keeps the edge pass
+  // from ever seeing ground pixels that a Wall has since painted over.
+  const field = new Uint8Array(image.width * image.height);
+  drawBand(image, level, layers.ground, layers.groundSupport, false, field);
+  drawShadows(image, level, layers.walls, layers.stairs);
   drawWalls(image, level, layers.walls, layers.stairs);
-  drawBand(image, level, layers.upper, layers.upperSupport, true);
+  drawBand(image, level, layers.upper, layers.upperSupport, true, field);
   drawUpperEdges(image, level, layers.upperSupport);
   drawStairs(image, level, layers.stairs, layers.walls);
   context.putImageData(image, 0, 0);

@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import {
   AUTHOR_TILE,
   MAX_STACK_ENTRIES,
@@ -20,6 +20,9 @@ import {
   unpackLevel,
   validateStack,
   buildTerrain,
+  RGB,
+  STONE,
+  RAISED_LIFT,
 } from '../src/terrain.js';
 
 const source = JSON.parse(readFileSync(new URL('../src/levels/level1.json', import.meta.url)));
@@ -154,7 +157,7 @@ function fakeCanvas() {
   return canvas;
 }
 
-const visual = blank(192, 160, 19);
+const visual = blank(320, 224, 19);
 for (let y = 0; y < visual.tileHeight; y++) for (let x = 0; x < visual.tileWidth; x++) {
   visual.tileStacks[y * visual.tileWidth + x] = ['f'];
 }
@@ -170,35 +173,95 @@ visual.tileStacks[4 * visual.tileWidth + 1] = ['f', '^', 'f'];
 visual.tileStacks[4 * visual.tileWidth + 3] = ['f', '^', 'f'];
 visual.tileStacks[1 * visual.tileWidth + 3] = ['f', 'b', 'g'];
 visual.tileStacks[1 * visual.tileWidth + 4] = ['f', 'g', 'b'];
+visual.tileStacks[3 * visual.tileWidth + 6] = ['f', '#', 'g', 'b'];
 // Every adjacent row must emit its own two-tile-high Wall sprite.
 for (let y = 0; y < 3; y++) visual.tileStacks[y * visual.tileWidth + 5] = ['f', '#'];
+// Isolated horizontal run exposes south/east shadow boundaries.
+visual.tileStacks[1 * visual.tileWidth + 7] = ['f', '#'];
+visual.tileStacks[1 * visual.tileWidth + 8] = ['f', '#'];
 const canvas = fakeCanvas();
 buildTerrain(visual, 1, canvas);
 const firstPixels = canvas.pixels();
 assert.ok(firstPixels.every((value, index) => index % 4 !== 3 || value === 255), 'Terrain cache contains transparent gaps');
 const pixelAt = (pixels, x, y) => [...pixels.slice((y * visual.width + x) * 4, (y * visual.width + x) * 4 + 3)];
-assert.deepEqual(pixelAt(firstPixels, 5 * 32 + 16, 16), [77, 102, 99], 'Joined Wall row did not render as dark solid mass');
-assert.deepEqual(pixelAt(firstPixels, 5 * 32 + 16, 1), [231, 232, 203], 'Wall mass is missing its back perimeter lip');
-assert.deepEqual(pixelAt(firstPixels, 5 * 32 + 16, 33), [77, 102, 99], 'Middle Wall row emitted a repeated lip');
-assert.deepEqual(pixelAt(firstPixels, 5 * 32 + 16, 65), [231, 232, 203], 'Exposed southern Wall row is missing its facade lip');
-assert.deepEqual(pixelAt(firstPixels, 5 * 32 + 1, 16), [190, 201, 180], 'Wall run is missing its exposed side return');
-assert.deepEqual(pixelAt(firstPixels, 1 * 32 + 16, 2 * 32 + 16), [73, 157, 72], 'Elevated Grass did not cover the Wall top');
-assert.deepEqual(pixelAt(firstPixels, 1 * 32 + 16, 2 * 32), [238, 240, 207], 'Elevated Grass merged with Ground across its north edge');
-assert.deepEqual(pixelAt(firstPixels, 1 * 32, 2 * 32 + 16), [168, 187, 160], 'Elevated Grass merged with Ground across its side edge');
-assert.deepEqual(pixelAt(firstPixels, 1 * 32 + 16, 2 * 32 + 30), [238, 240, 207], 'Elevated Grass hid the structural edge');
-assert.deepEqual(pixelAt(firstPixels, 1 * 32 + 16, 3 * 32 + 16), [77, 102, 99], 'Elevated Grass covered the lower Wall face');
-assert.deepEqual(pixelAt(firstPixels, 2 * 32 + 16, 2 * 32 + 16), [211, 216, 194], 'Elevated Floor ordered above Wall did not cover Wall');
-assert.deepEqual(pixelAt(firstPixels, 3 * 32 + 16, 2 * 32), [238, 240, 207], 'Stairs are missing their top tread');
-assert.deepEqual(pixelAt(firstPixels, 3 * 32 + 16, 2 * 32 + 6), [123, 146, 137], 'Stairs are missing their riser');
-assert.deepEqual(pixelAt(firstPixels, 4 * 32, 2 * 32 + 4), [190, 201, 180], 'Joined Stairs emitted an internal rail');
-assert.deepEqual(pixelAt(firstPixels, 4 * 32 + 30, 2 * 32 + 20), [190, 201, 180], 'Stairs duplicated a rail beside Wall');
-assert.deepEqual(pixelAt(firstPixels, 16, 3 * 32 + 16), [77, 102, 99], 'Wall behind Stairs emitted a pushed-back facade');
-assert.deepEqual(pixelAt(firstPixels, 1, 4 * 32 + 16), [231, 232, 203], 'Stairs are missing their outer rail');
-assert.deepEqual(pixelAt(firstPixels, 1 * 32 + 30, 4 * 32 + 16), [77, 102, 99], 'Stairs are missing their opposite outer rail');
-assert.deepEqual(pixelAt(firstPixels, 3 * 32 + 16, 3 * 32 + 30), [123, 146, 137], 'Vertically touching Stairs emitted an internal baseline');
-assert.deepEqual(pixelAt(firstPixels, 4 * 32 + 16, 3 * 32 + 30), [46, 68, 70], 'Exposed Stairs are missing their bottom baseline');
+// Structural stone is flat, so it is asserted against the palette by name;
+// ground materials now carry tonal noise, so those are asserted as a shade of
+// the material within the noise band rather than as one exact value.
+const shade = (colour, lift) => colour.map((value, index) => value + lift * [1, 1.15, 0.7][index]);
+const near = (actual, expected, message, tolerance = 12) => assert.ok(
+  actual.every((value, index) => Math.abs(value - expected[index]) <= tolerance),
+  `${message} (got ${actual}, expected within ${tolerance} of ${expected.map(Math.round)})`,
+);
+const luma = colour => colour[0] * 0.3 + colour[1] * 0.6 + colour[2] * 0.1;
+
+assert.deepEqual(pixelAt(firstPixels, 5 * 32 + 16, 16), STONE.mass, 'Joined Wall row did not render as dark solid mass');
+assert.deepEqual(pixelAt(firstPixels, 5 * 32 + 16, 1), STONE.lip, 'Wall mass is missing its back perimeter lip');
+assert.deepEqual(pixelAt(firstPixels, 5 * 32 + 16, 33), STONE.mass, 'Middle Wall row emitted a repeated lip');
+assert.deepEqual(pixelAt(firstPixels, 5 * 32 + 16, 65), STONE.lip, 'Exposed southern Wall row is missing its facade lip');
+assert.deepEqual(pixelAt(firstPixels, 5 * 32 + 1, 16), STONE.side, 'Wall run is missing its exposed side return');
+near(pixelAt(firstPixels, 1 * 32 + 16, 2 * 32 + 16), shade(RGB[1], RAISED_LIFT), 'Elevated Grass did not receive the height grade');
+assert.deepEqual(pixelAt(firstPixels, 1 * 32 + 16, 2 * 32), STONE.lip, 'Elevated Grass merged with Ground across its north edge');
+assert.deepEqual(pixelAt(firstPixels, 1 * 32, 2 * 32 + 16), STONE.side, 'Elevated Grass merged with Ground across its side edge');
+assert.deepEqual(pixelAt(firstPixels, 1 * 32 + 16, 2 * 32 + 30), STONE.lip, 'Elevated Grass hid the structural edge');
+assert.deepEqual(pixelAt(firstPixels, 1 * 32 + 16, 3 * 32 + 16), STONE.mass, 'Elevated Grass covered the lower Wall face');
+near(pixelAt(firstPixels, 2 * 32 + 16, 2 * 32 + 16), shade(RGB[4], RAISED_LIFT), 'Elevated Floor did not receive the height grade');
+near(pixelAt(firstPixels, 2 * 32 + 16, 1 * 32 + 16), shade(RGB[3], RAISED_LIFT), 'Elevated Water did not receive the height grade');
+// Props are flat fills, so the grade is checked as an exact relationship
+// between the same decoration drawn on both bands.
+const groundDecoration = pixelAt(firstPixels, 4 * 32 + 16, 1 * 32 + 20);
+assert.deepEqual(
+  pixelAt(firstPixels, 6 * 32 + 16, 3 * 32 + 20),
+  shade(groundDecoration, RAISED_LIFT).map(Math.round),
+  'Elevated decoration did not receive the height grade',
+);
+assert.ok(luma(groundDecoration) < luma(RGB[1]), 'Ground decoration is not a silhouette against the Grass it sits on');
+assert.deepEqual(pixelAt(firstPixels, 3 * 32 + 16, 2 * 32), STONE.lip, 'Stairs are missing their top tread');
+assert.deepEqual(pixelAt(firstPixels, 3 * 32 + 16, 2 * 32 + 6), STONE.riser, 'Stairs are missing their riser');
+assert.deepEqual(pixelAt(firstPixels, 4 * 32, 2 * 32 + 4), STONE.tread, 'Joined Stairs emitted an internal rail');
+assert.deepEqual(pixelAt(firstPixels, 4 * 32 + 30, 2 * 32 + 20), STONE.tread, 'Stairs duplicated a rail beside Wall');
+assert.deepEqual(pixelAt(firstPixels, 16, 3 * 32 + 16), STONE.mass, 'Wall behind Stairs emitted a pushed-back facade');
+assert.deepEqual(pixelAt(firstPixels, 1, 4 * 32 + 16), STONE.lip, 'Stairs are missing their outer rail');
+assert.deepEqual(pixelAt(firstPixels, 1 * 32 + 30, 4 * 32 + 16), STONE.mass, 'Stairs are missing their opposite outer rail');
+assert.deepEqual(pixelAt(firstPixels, 3 * 32 + 16, 3 * 32 + 30), STONE.riser, 'Vertically touching Stairs emitted an internal baseline');
+assert.deepEqual(pixelAt(firstPixels, 4 * 32 + 16, 3 * 32 + 30), STONE.base, 'Exposed Stairs are missing their bottom baseline');
+// Shadows multiply whatever was baked underneath, so they are asserted as a
+// darkening of the lit Floor rather than as a colour of their own.
+const litFloor = pixelAt(firstPixels, 7 * 32 - 1, 2 * 32 + 16);
+near(litFloor, RGB[4], 'Wall cast a shadow against the light direction', 8);
+near(pixelAt(firstPixels, 7 * 32 + 16, 3 * 32 + 13), RGB[4], 'Wall shadow exceeded its agreed depth', 8);
+for (const [x, y, message] of [
+  [7 * 32 + 16, 3 * 32 + 4, 'Wall run is missing its continuous southern shadow'],
+  [8 * 32 + 6, 3 * 32 + 4, 'Joined Wall shadow has a tile seam'],
+  [9 * 32 + 2, 2 * 32 + 16, 'Wall run is missing its exposed eastern shadow'],
+  [16, 6 * 32 + 2, 'Stairs are missing their restrained foot shadow'],
+]) {
+  const shadowed = pixelAt(firstPixels, x, y);
+  assert.ok(luma(shadowed) < luma(litFloor) * 0.8, message);
+  assert.ok(
+    shadowed[2] / litFloor[2] > shadowed[0] / litFloor[0],
+    `${message}: shadow is not cooler than the surface it falls on`,
+  );
+}
+const fixtureRgb = Buffer.alloc(visual.width * visual.height * 3);
+for (let source = 0, target = 0; source < firstPixels.length; source += 4) {
+  fixtureRgb[target++] = firstPixels[source];
+  fixtureRgb[target++] = firstPixels[source + 1];
+  fixtureRgb[target++] = firstPixels[source + 2];
+}
+writeFileSync('/tmp/terrain-lighting-fixture.ppm', Buffer.concat([
+  Buffer.from(`P6\n${visual.width} ${visual.height}\n255\n`), fixtureRgb,
+]));
 buildTerrain(unpackLevel(packLevel(visual)), 1, canvas);
 assert.deepEqual(canvas.pixels(), firstPixels, 'Render changed after save/load or canvas reuse');
+
+const maskedShadow = blank(96, 160, 21);
+maskedShadow.tileStacks.fill(['f']);
+maskedShadow.tileStacks[1] = ['f', '#'];
+maskedShadow.tileStacks[2 * maskedShadow.tileWidth + 1] = ['f', '#', 'g'];
+const maskedCanvas = fakeCanvas();
+buildTerrain(maskedShadow, 1, maskedCanvas);
+const maskedIndex = (68 * maskedShadow.width + 48) * 4;
+near([...maskedCanvas.pixels().slice(maskedIndex, maskedIndex + 3)], shade(RGB[1], RAISED_LIFT), 'Wall shadow leaked onto later Elevated terrain');
 
 // Removing upper layers and rebuilding the same canvas must restore lower pixels.
 const changedPixels = firstPixels.slice();
