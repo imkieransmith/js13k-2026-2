@@ -41,6 +41,11 @@ const SHAKE_HIT = 12;
 const SHAKE_KILL = 32;
 const SHAKE_HURT = 30;
 const SHAKE_LASER = 24;
+// The rumble the beam settles into once the ignition has rung out. It has to
+// stay well under SHAKE_HIT: the laser shakes the frame every time it lands a
+// hit, and a floor anywhere near that amplitude would be the one thing capable
+// of hiding the laser's own hits.
+const SHAKE_LASER_HOLD = 6;
 // Shake bleeds off at a fixed rate rather than a fixed duration, so raising an
 // amplitude lengthens the shake as well as widening it. At these numbers a kill
 // rings for most of a second, which is its own dial.
@@ -50,6 +55,9 @@ const SHAKE_DECAY = 34;
 const PUNCH_TIME = 0.22;
 const PUNCH_ZOOM = 0.16;
 const PUNCH_WIDTH = 4;
+// Rainbow bands per second travelling out through the laser's vignette. Slow
+// enough to read as a flow rather than a flicker at the edge of vision.
+const VIGNETTE_SCROLL = 2.5;
 // How far the beam takes to come up to full opacity. Without it the muzzle end
 // is a cut edge — an obvious rectangle with an outline drawn round it, which is
 // the one place the beam looks drawn rather than emitted.
@@ -444,15 +452,17 @@ function updateLaser(dt) {
   const wasActive = laser.active;
   laser.active = laser.held && laser.charge > 0;
   if (!laser.active) return;
-  // One kick as the beam lights, and nothing while it burns. Shake in this game
-  // is punctuation — it means something just landed — and a beam that shakes for
-  // as long as it is held turns it into weather. Worse, the laser already shakes
-  // on every hit it lands through hurtEnemy, so a sustained floor would be the
-  // one thing that hides its own hits.
+  // A kick when it lights, then a floor it will not decay below for as long as
+  // the trigger is held: the ignition rings out and lands in a rumble rather
+  // than in silence. Clamping a floor rather than adding to the shake is what
+  // keeps the two readable as one event — the kick decays into the hold instead
+  // of stacking on top of it — and it leaves everything louder than the floor
+  // still able to punch through, which is why the floor sits well under a hit.
   if (!wasActive) {
     shake = Math.max(shake, SHAKE_LASER);
     laser.punch = PUNCH_TIME;
   }
+  shake = Math.max(shake, SHAKE_LASER_HOLD);
 
   laser.directionX = player.facingX;
   laser.directionY = player.facingY;
@@ -1491,8 +1501,23 @@ function drawVignette(paint, amount) {
   );
   wash.addColorStop(0, '#000');
   if (typeof paint === 'string') wash.addColorStop(1, paint);
-  else for (let band = 0; band < paint.length; band++) {
-    wash.addColorStop(0.45 + 0.55 * band / (paint.length - 1), paint[band]);
+  else {
+    // One spectrum between the play area and the corners, sliding outward.
+    // The slide is split into a whole part and a fraction on purpose: the stop
+    // positions carry the fraction so the rings travel smoothly, and the colour
+    // index carries the whole so that when a ring has moved exactly one band
+    // width it hands its colour to its neighbour and the pattern repeats
+    // seamlessly. Doing either half alone jumps a whole band at every wrap.
+    const flow = gameTime * VIGNETTE_SCROLL;
+    const slide = flow % 1;
+    const stepped = Math.floor(flow) % paint.length;
+    const bands = paint.length;
+    for (let band = 0; band <= bands; band++) {
+      wash.addColorStop(
+        0.45 + 0.55 * clamp((band + slide) / bands, 0, 1),
+        paint[(band - stepped + paint.length) % paint.length],
+      );
+    }
   }
   ctx.globalAlpha = Math.min(1, amount);
   ctx.globalCompositeOperation = 'lighter';
