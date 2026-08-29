@@ -92,6 +92,7 @@ const SHAFT_SKEW = 0.55;
 // sweep and laser. Sharing it is what makes them read as the same magic rather
 // than as five effects that happen to be colourful.
 const RAINBOW = ['#ff7ab0', '#ffc55c', '#fff3a6', '#8ce6a0', '#6fc8f5', '#b48cf0'];
+const DARK_RAINBOW = ['#a34', '#a74', '#a97', '#497', '#378', '#647'];
 // Two dark inks, one warm for the llamacorn and its magic and one cool for the
 // stone Constructs. Every sprite and effect is built silhouette-first out of
 // these, so a single pixel of ink shows around each shape: the reference art
@@ -1398,7 +1399,7 @@ function drawPlayer(playerX, playerY) {
 }
 
 /**
- * One continuous beam, not a row of beads: one pixel of ink, then the spectrum
+ * One continuous beam, not a row of beads: a dark spectrum, then its bright twin
  * scrolling away down its length, then a white core hot enough to blow out.
  * The additive halo it used to carry is gone. Drawn as an outer layer it
  * thickened the edge to three pixels, which is the one thing nothing else in
@@ -1426,15 +1427,14 @@ function drawLaser(playerX, playerY) {
   const endX = playerX + laser.directionX * run - hornX;
   const endY = playerY + laser.directionY * run - hornY;
   const length = Math.hypot(endX, endY);
-  // Ink, then white, then the spectrum, then a white core: a dark rim to hold
-  // the shape against pale stone, and a hot rim inside it because that is what
-  // separates a beam from a painted stripe. The ink alone was legible; the ink
-  // and the white together are a laser. The whole thing swells for the length
-  // of the ignition flare, so the shot arrives rather than appearing.
+  // A dark spectrum, then the same bright spectrum, then a white core. Both
+  // ramps share phase and distance, so every edge band is a dark shade of the
+  // colour inside it rather than a generic outline. The whole thing swells for
+  // the length of the ignition flare, so the shot arrives rather than appearing.
   const grow = Math.round(laser.punch / PUNCH_TIME * PUNCH_WIDTH);
   drawBeam(
     hornX, hornY, endX / length, endY / length, 0, length,
-    [[11 + grow, INK], [9 + grow, HOT], [7 + grow, RAINBOW], [3 + grow, HOT]],
+    [[11 + grow, DARK_RAINBOW], [9 + grow, RAINBOW], [3 + grow, HOT]],
     gameTime * 26, 2, BEAM_FADE,
   );
 }
