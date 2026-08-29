@@ -130,6 +130,7 @@ let renderScale = 1;
 let renderOffsetX = 0;
 let renderOffsetY = 0;
 let grade = null;
+let hurtVignette = null;
 
 const player = {
   x: level.player[0],
@@ -277,7 +278,14 @@ function updatePlayer(dt) {
     player.vy = player.dashY * DASH_SPEED;
     player.trailClock -= dt;
     if (player.trailClock <= 0) {
-      trails.push({ x: player.x, y: player.y, life: 0.16 });
+      // Facing and colour belong to the captured pose. Deriving either while
+      // drawing makes every surviving ghost flip or change hue together when
+      // the aim turns or the oldest sample expires.
+      trails.push({
+        x: player.x, y: player.y, life: 0.16,
+        flip: player.facingX < 0 ? -1 : 1,
+        colour: RAINBOW[(gameTime * 40 | 0) % RAINBOW.length],
+      });
       player.trailClock = 0.025;
     }
     // Returning to running speed avoids a sticky pause at the end of a dash.
@@ -643,7 +651,8 @@ function resetEncounter() {
   player.health = PLAYER_MAX_HEALTH;
   player.invulnerability = 0.8;
   player.hitEffect = 0;
-  player.dashTime = player.dashCooldown = player.tuck = 0;
+  player.dashTime = player.dashCooldown = player.tuck = player.walk = player.step = 0;
+  player.trailClock = 0;
   attack.time = attack.cooldown = attack.hits = 0;
   laser.charge = DEBUG_START_CHARGE;
   laser.punch = player.hurtGlow = 0;
@@ -1157,15 +1166,14 @@ function drawPlayer(playerX, playerY) {
   // The dash leaves the body's own silhouette behind it, tinted through the
   // spectrum. Matching the barrel and head rather than using a bigger block
   // keeps the trail reading as afterimages instead of dropped confetti.
-  for (let i = 0; i < trails.length; i++) {
-    const trail = trails[i];
+  for (const trail of trails) {
     const ghostX = pixelX(trail.x);
     const ghostY = pixelY(trail.y);
     ctx.globalAlpha = trail.life / 0.16 * 0.7;
-    ctx.fillStyle = RAINBOW[i % RAINBOW.length];
-    spriteRect(ghostX, ghostY, flip, -9, -6, 16, 15);
+    ctx.fillStyle = trail.colour;
+    spriteRect(ghostX, ghostY, trail.flip, -9, -6, 16, 15);
     spriteRect(
-      ghostX + player.dashX * 4, ghostY + player.dashY * 4, flip,
+      ghostX + player.dashX * 4, ghostY + player.dashY * 4, trail.flip,
       2, -22, 12, 18,
     );
   }
@@ -1535,17 +1543,27 @@ function drawMotes(bounds) {
  * whole frame onto a single warm-centre/cool-corner ramp, and it sinks the
  * frame edges into shadow so the eye stays on the player.
  */
-function buildGrade() {
+function vignetteGradient(inner) {
   const radius = Math.hypot(screenWidth, screenHeight) / 2;
-  grade = ctx.createRadialGradient(
-    screenWidth / 2, screenHeight / 2, radius * 0.3,
+  return ctx.createRadialGradient(
+    screenWidth / 2, screenHeight / 2, radius * inner,
     screenWidth / 2, screenHeight / 2, radius,
   );
+}
+
+function buildGrade() {
+  grade = vignetteGradient(0.3);
   // Near-neutral through the play area so materials keep their own colour,
   // then a hard fall into cool shadow only once it reaches the frame.
   grade.addColorStop(0, '#fffaec');
   grade.addColorStop(0.6, '#f0ecd6');
   grade.addColorStop(1, '#334b53');
+
+  // Hurt is always the same paint, so it can stay cached. The rainbow wash
+  // changes its stops as it flows and is rebuilt only while the laser is up.
+  hurtVignette = vignetteGradient(0.4);
+  hurtVignette.addColorStop(0, '#000');
+  hurtVignette.addColorStop(1, '#e94863');
 }
 
 /**
@@ -1560,25 +1578,15 @@ function buildGrade() {
  * Added rather than blended, which is what lets the centre be a true no-op:
  * adding black changes nothing, so the play area is untouched no matter how
  * hard the edges burn, and the strength is honest `globalAlpha` rather than a
- * per-stop alpha ramp. `paint` is a flat colour, or the spectrum itself for the
- * laser, banded outward from the play area to the corners.
+ * per-stop alpha ramp. `paint` is the cached hurt gradient, or the spectrum
+ * itself for the moving laser wash.
  */
 function drawVignette(paint, amount) {
   if (amount <= 0) return;
-  const radius = Math.hypot(screenWidth, screenHeight) / 2;
-  const wash = ctx.createRadialGradient(
-    screenWidth / 2, screenHeight / 2, radius * 0.4,
-    screenWidth / 2, screenHeight / 2, radius,
-  );
-  wash.addColorStop(0, '#000');
-  if (typeof paint === 'string') wash.addColorStop(1, paint);
-  else {
-    // One spectrum between the play area and the corners, sliding outward.
-    // The slide is split into a whole part and a fraction on purpose: the stop
-    // positions carry the fraction so the rings travel smoothly, and the colour
-    // index carries the whole so that when a ring has moved exactly one band
-    // width it hands its colour to its neighbour and the pattern repeats
-    // seamlessly. Doing either half alone jumps a whole band at every wrap.
+  let wash = paint;
+  if (paint === RAINBOW) {
+    wash = vignetteGradient(0.4);
+    wash.addColorStop(0, '#000');
     const flow = gameTime * VIGNETTE_SCROLL;
     const slide = flow % 1;
     const stepped = Math.floor(flow) % paint.length;
@@ -1678,7 +1686,7 @@ function draw() {
   // is the frame. Hurt last, because being hit outranks everything else on
   // screen — including your own laser going off.
   drawVignette(RAINBOW, (laser.active ? 0.5 : 0) + punch * 0.6);
-  drawVignette('#e94863', player.hurtGlow * 0.9);
+  drawVignette(hurtVignette, player.hurtGlow * 0.9);
 }
 
 function frame(now) {

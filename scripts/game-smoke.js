@@ -20,6 +20,7 @@ registerHooks({
 });
 
 const calls = [];
+let gradientCount = 0;
 const record = name => (...args) => { calls.push([name, ...args]); };
 
 /**
@@ -40,7 +41,10 @@ function fakeContext() {
     drawImage: record('drawImage'),
     createImageData: (width, height) => ({ width, height, data: new Uint8ClampedArray(width * height * 4) }),
     putImageData: record('putImageData'),
-    createRadialGradient: () => ({ addColorStop: record('addColorStop') }),
+    createRadialGradient: () => {
+      gradientCount++;
+      return { addColorStop: record('addColorStop') };
+    },
     fillRect(...args) {
       for (const value of args) assert.ok(Number.isFinite(value), `fillRect received ${value}`);
       calls.push(['fillRect', ...args]);
@@ -103,6 +107,9 @@ for (const expected of ['drawImage', 'fillRect', 'setTransform', 'addColorStop']
   assert.ok(kinds.has(expected), `Render never issued ${expected}`);
 }
 assert.ok(calls.length > 10000, 'Render issued suspiciously little work');
+// Grade and hurt wash are viewport resources. The rainbow wash is deliberately
+// dynamic, but an idle render must not rebuild either static gradient.
+assert.equal(gradientCount, 2, 'Render loop rebuilt a cached screen gradient');
 assert.equal(canvas.context.globalAlpha, 1, 'A draw pass leaked a globalAlpha');
 assert.equal(canvas.context.globalCompositeOperation, 'source-over', 'A draw pass leaked a composite mode');
 
