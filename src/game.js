@@ -27,7 +27,6 @@ const ATTACK_REACH = 52;
 const ATTACK_ARC = Math.PI / 2;
 const LASER_MAX_CHARGE = 5;
 const LASER_HIT_CHARGE = 0.5;
-const LASER_REACH = 360;
 const LASER_WIDTH = 7;
 const MELEE_WINDUP = 0.45;
 const RANGED_WINDUP = 0.62;
@@ -62,7 +61,7 @@ const WARNING = '#e0324f';
 const HOT = '#fffdf2';
 // Whatever is animating the rubble. Violet at rest, magenta once roused: it is
 // the only saturated colour anywhere on a Construct, so aggro reads instantly.
-const MAGIC_HOT = '#ffd9f5';
+const MAGIC_HOT = '#fdf';
 // Floor-slab light, body, carving and wall shadow. Constructs look torn from
 // the same temple tiles rather than assembled from generic grey machinery.
 const STONE = ['#dbd8bf', '#cbc8b0', '#969584', '#687c74'];
@@ -73,10 +72,10 @@ const TAIL_SEGMENTS = LASER_MAX_CHARGE / LASER_HIT_CHARGE;
 // The plume swells through its middle and tapers at the tip. A tail of even
 // width is a progress bar with a horse attached; the taper is what lets it be
 // large enough to read a ten-step gauge at 2x and still look like hair.
-const TAIL_WIDTHS = [3, 5, 6, 7, 7, 6, 5, 4, 3, 2];
+const TAIL_WIDTHS = [4, 6, 7, 8, 7, 7, 6, 5, 4, 4];
 // The rainbow fleece, as offsets from the head: six strands stepping back and
 // down the crest from behind the ears onto the back.
-const MANE = [[1, -20, 5, 3], [0, -17, 5, 3], [-1, -14, 5, 3], [-2, -11, 6, 3], [-3, -8, 6, 3], [-4, -5, 6, 3]];
+const MANE = [[1, -20, 5, 3], [0, -17, 5, 3], [-1, -14, 5, 3], [-2, -11, 6, 2], [-3, -9, 6, 2], [-4, -7, 6, 2]];
 
 let screenWidth = 1;
 let screenHeight = 1;
@@ -119,7 +118,7 @@ const aim = {
 };
 const pointer = { x: 0, y: 0, seen: false };
 const attack = { time: 0, cooldown: 0, directionX: 0, directionY: 1, hits: 0 };
-const laser = { charge: 0, held: false, active: false, directionX: 0, directionY: 1 };
+const laser = { charge: 0, held: false, active: false, directionX: 0, directionY: 1, reach: 0 };
 const ENEMY_SPAWNS = level.enemies;
 const makeEnemies = () => ENEMY_SPAWNS.map(([x, y, type], id) => ({
   id, type, x, y, previousX: x, previousY: y, homeX: x, homeY: y,
@@ -281,6 +280,15 @@ function updateCamera() {
 }
 
 /** Convert the mouse from screen space and cap its world-space reach. */
+function viewportReach(dirX, dirY, margin) {
+  const spanX = viewWidth / 2 - margin;
+  const spanY = viewHeight / 2 - margin;
+  return Math.max(0, Math.min(
+    dirX ? ((dirX > 0 ? spanX : -spanX) + camera.x - player.x) / dirX : Infinity,
+    dirY ? ((dirY > 0 ? spanY : -spanY) + camera.y - player.y) / dirY : Infinity,
+  ));
+}
+
 function updateAim() {
   let dx = player.facingX * AIM_DISTANCE;
   let dy = player.facingY * AIM_DISTANCE;
@@ -298,16 +306,10 @@ function updateAim() {
   }
   // Keep the complete marker inside the current viewport. This matters near
   // map edges and on small displays where the full aim radius cannot fit.
-  let screenReach = AIM_DISTANCE;
-  const left = camera.x - viewWidth / 2 + AIM_MARGIN;
-  const right = camera.x + viewWidth / 2 - AIM_MARGIN;
-  const top = camera.y - viewHeight / 2 + AIM_MARGIN;
-  const bottom = camera.y + viewHeight / 2 - AIM_MARGIN;
-  if (player.facingX > 0) screenReach = Math.min(screenReach, (right - player.x) / player.facingX);
-  if (player.facingX < 0) screenReach = Math.min(screenReach, (left - player.x) / player.facingX);
-  if (player.facingY > 0) screenReach = Math.min(screenReach, (bottom - player.y) / player.facingY);
-  if (player.facingY < 0) screenReach = Math.min(screenReach, (top - player.y) / player.facingY);
-  const reach = Math.min(distance, Math.max(0, screenReach));
+  const reach = Math.min(
+    distance, AIM_DISTANCE,
+    viewportReach(player.facingX, player.facingY, AIM_MARGIN),
+  );
   aim.x = player.x + player.facingX * reach;
   aim.y = player.y + player.facingY * reach;
 }
@@ -416,6 +418,7 @@ function updateLaser(dt) {
 
   laser.directionX = player.facingX;
   laser.directionY = player.facingY;
+  laser.reach = viewportReach(laser.directionX, laser.directionY, -8);
   laser.charge = Math.max(0, laser.charge - dt);
   for (const enemy of enemies) {
     if (!enemy.health || enemy.laserCooldown) continue;
@@ -423,7 +426,7 @@ function updateLaser(dt) {
     const dy = enemy.y - player.y;
     const along = dx * laser.directionX + dy * laser.directionY;
     const across = Math.abs(dx * laser.directionY - dy * laser.directionX);
-    if (along < 0 || along > LASER_REACH + 12 || across > LASER_WIDTH + 12) continue;
+    if (along < 0 || along > laser.reach + 12 || across > LASER_WIDTH + 12) continue;
     hurtEnemy(enemy, laser.directionX * 55, laser.directionY * 55);
     enemy.laserCooldown = 0.38;
   }
@@ -631,7 +634,7 @@ function visibleBounds(cameraX, cameraY) {
 // translucent so the same shadow works over grass, stone and water alike.
 function drawShadow(x, y, radius, alpha = 0.22) {
   ctx.globalAlpha = alpha;
-  ctx.fillStyle = '#0b171c';
+  ctx.fillStyle = '#011';
   ctx.fillRect(x - radius, y - 1, radius * 2, 3);
   ctx.fillRect(x - radius + 2, y - 2, radius * 2 - 4, 5);
   ctx.fillRect(x - radius + 5, y - 3, radius * 2 - 10, 7);
@@ -802,7 +805,7 @@ function drawPips(x, y, current, max, colour) {
   ctx.fillStyle = INK;
   ctx.fillRect(left - 1, top - 1, width + 2, 5);
   for (let pip = 0; pip < max; pip++) {
-    ctx.fillStyle = pip < current ? colour : '#43525a';
+    ctx.fillStyle = pip < current ? colour : '#455';
     ctx.fillRect(left + pip * 4, top, 3, 3);
   }
 }
@@ -820,7 +823,7 @@ function drawMagicMotes(x, y, seed, colour) {
     const moteY = pixelY(y + 10 - climb * 29);
     const alpha = Math.sin(climb * Math.PI);
     ctx.globalAlpha = alpha * 0.55;
-    ctx.fillStyle = '#281936';
+    ctx.fillStyle = '#213';
     ctx.fillRect(moteX - 1, moteY, 2, 2 + (mote & 1));
     ctx.globalAlpha = alpha;
     ctx.fillStyle = colour;
@@ -845,7 +848,7 @@ function drawEnemyDeath(enemy, x, y) {
     const width = 2 + (size >> 2);
     const puffX = Math.round(x + Math.cos(angle) * distance * 0.55);
     const puffY = Math.round(y - 4 + Math.sin(angle) * distance * 0.45 - progress * 27);
-    ctx.fillStyle = puff & 1 ? '#4e2a86' : '#281936';
+    ctx.fillStyle = puff & 1 ? '#528' : '#213';
     ctx.fillRect(puffX - (width >> 1), puffY - (size >> 1), width, size);
     ctx.fillRect(puffX - (width >> 1) + (puff & 1 ? 1 : -1), puffY + 1, width, Math.max(2, size - 3));
   }
@@ -869,7 +872,7 @@ function drawEnemyDeath(enemy, x, y) {
 function drawEnemy(enemy, x, y) {
   x = pixelX(x);
   y = pixelY(y);
-  const core = enemy.mode === 1 ? '#ff4ad4' : '#8a4ce0';
+  const core = enemy.mode === 1 ? '#f4d' : '#84e';
   // The shadow drains with the death smoke instead of vanishing one frame
   // after it; living atmosphere remains visible while the body hurt-flashes.
   drawShadow(x, y + 12, enemy.type ? 13 : 16, enemy.health ? 0.22 : 0.22 * enemy.death / CONSTRUCT_DEATH);
@@ -912,7 +915,7 @@ function drawEnemy(enemy, x, y) {
     ctx.fillRect(x - 8, y + 6, 16, 1);
     ctx.fillRect(x - 8, y - 5, 1, 11);
     ctx.fillRect(x + 7, y - 5, 1, 11);
-    ctx.fillStyle = enemy.mode === 1 ? '#a02a86' : '#4e2a86';
+    ctx.fillStyle = enemy.mode === 1 ? '#a28' : '#528';
     ctx.fillRect(x - 7, y, 4, 1);
     ctx.fillRect(x + 3, y, 5, 1);
     ctx.fillStyle = STONE_INK;
@@ -1001,6 +1004,10 @@ function spriteRect(x, y, flip, ox, oy, width, height) {
  * dodging. Spent bands are one flat grey rather than two alternating ones —
  * banding the empty half turned the tail into a ladder, and there is nothing
  * to count there anyway. The filled half is where the reading happens.
+ *
+ * It is broad at the dock and blunt at the tip. A plume that narrows at both
+ * ends hangs off the rump on a stalk and tapers to a spike, which reads as a
+ * separate object hooked onto the animal rather than as part of it.
  */
 function drawTail(x, y, flip) {
   const filled = Math.ceil(laser.charge / LASER_MAX_CHARGE * TAIL_SEGMENTS);
@@ -1012,15 +1019,17 @@ function drawTail(x, y, flip) {
     for (let segment = 0; segment < TAIL_SEGMENTS; segment++) {
       const width = TAIL_WIDTHS[segment];
       const grow = pass ? 0 : 1;
-      // Flush with the barrel's outline at the dock, drifting back a pixel
-      // every four bands. The plume is drawn before the body, so the dock is
-      // buried and the tail grows out of the rump rather than resting on it.
-      const back = -10 - (segment >> 2);
+      // The dock runs two columns under the rump, so the top bands overlap the
+      // barrel wherever its back edge happens to be on that row rather than
+      // meeting it at one column and opening a gap either side. From there the
+      // plume sweeps back a pixel every two bands, which is what keeps a
+      // twenty-row meter from hanging to the ground like a rope.
+      const back = -8 - (segment >> 1);
       // The spectrum is spread across the whole plume rather than repeated
       // every six bands, so it reads as one rainbow being poured in from the
       // dock instead of restarting partway down the tail.
       ctx.fillStyle = pass
-        ? segment < filled ? RAINBOW[segment * RAINBOW.length / TAIL_SEGMENTS | 0] : '#8b899e'
+        ? segment < filled ? RAINBOW[segment * RAINBOW.length / TAIL_SEGMENTS | 0] : '#889'
         : INK;
       spriteRect(
         x, y, flip, back - width - grow, -6 + segment * 2 - grow,
@@ -1095,31 +1104,60 @@ function drawPlayer(playerX, playerY) {
   // and the fleece swings across the face — the cheapest possible back-of-head
   // pose, and the one thing that stops "walking north" reading as "south".
   const away = player.facingY < -0.45;
+  const toward = player.facingY > 0.45;
   const swing = away ? 3 : 0;
-  const leanX = away ? -2 : player.facingY > 0.45 ? 1 : 0;
-  const leanY = away ? -2 : player.facingY > 0.45 ? 2 : 0;
+  const leanX = away ? -2 : toward ? 1 : 0;
+  const leanY = away ? -2 : toward ? 2 : 0;
   const rect = (ox, oy, width, height) => spriteRect(x, bodyY, flip, ox, oy, width, height);
   const head = (ox, oy, width, height) =>
     spriteRect(x, bodyY, flip, ox + leanX, oy + leanY, width, height);
   // Feet stay on the ground while the barrel bobs above them.
   const leg = (ox, oy, width, height) => spriteRect(x, y, flip, ox, oy, width, height);
+  // Facing the camera, the crest is seen end-on and its upper half is simply on
+  // the far side of the neck. Narrowing the strands from the back — twice as
+  // much at the poll, where the turn is sharpest — is what sells that; left at
+  // full width the fleece reads as a stripe pasted across the front of a neck
+  // that is plainly pointing at you. `grow` is the silhouette pass, which needs
+  // the identical offsets a pixel larger.
+  const mane = (strand, grow) => {
+    const [ox, oy, width, height] = MANE[strand];
+    const hidden = toward ? (strand < 2 ? 2 : 1) : 0;
+    head(
+      ox + swing + hidden - grow, oy - grow,
+      width - hidden + grow * 2, height + grow * 2,
+    );
+  };
 
   drawTail(x, bodyY, flip);
+
+  // The off-side pair, drawn before the body and in a darker tone. Each is
+  // tucked behind its near neighbour so only its inner edge is ever seen: a far
+  // leg clear of the near one on both sides sets two outlines side by side with
+  // a sliver of coat trapped between them, which is what made the first attempt
+  // read as a drawing mistake at 2x. The two of them share the single ink column
+  // between the near pair for the same reason. They also stop a row short of the
+  // ground, so the near pair keeps the weight.
+  ctx.fillStyle = INK;
+  leg(-6, 4 - liftA, 5, 11);
+  leg(0, 3 - liftB, 5, 11);
+  ctx.fillStyle = '#88b';
+  leg(-5, 5 - liftA, 3, 9);
+  leg(1, 4 - liftB, 3, 9);
 
   // Silhouette. Three overlapping rectangles per mass — each narrower and
   // taller than the last — take every corner off without drawing a curve. Two
   // was enough for a pony and still left a fridge; a llama is rounder than it
   // is long, so the barrel needs the third.
   ctx.fillStyle = INK;
-  rect(-10, -4, 18, 11);
+  rect(-10, -4, 19, 11);
   rect(-8, -6, 14, 15);
   rect(-6, -7, 10, 17);
   // Legs are drawn as one plane, not two. An off-side pair peeking three
   // pixels out from behind the near pair put its own outline alongside theirs,
   // and two dark lines with a sliver of coat trapped between them read as a
   // drawing mistake at 2x. Their volume comes from a shaded back edge instead.
-  leg(-9, 5 - liftB, 6, 11);
-  leg(2, 5 - liftA, 6, 11);
+  leg(-10, 5 - liftB, 6, 11);
+  leg(3, 5 - liftA, 6, 11);
   head(2, -14, 9, 14);
   head(4, -16, 7, 9);
   head(3, -20, 10, 8);
@@ -1132,18 +1170,18 @@ function drawPlayer(playerX, playerY) {
   // The fleece is outlined with the rest of the silhouette rather than after
   // it, because ink laid over a finished coat leaves a dark seam wherever the
   // two meet.
-  for (const [ox, oy, width, height] of MANE) head(ox + swing - 1, oy - 1, width + 2, height + 2);
+  for (let strand = 0; strand < MANE.length; strand++) mane(strand, 1);
 
-  const coat = player.dashTime ? '#fff7bd' : '#eef';
+  const coat = player.dashTime ? '#feb' : '#eef';
   ctx.fillStyle = coat;
-  rect(-9, -3, 16, 9);
+  rect(-9, -3, 17, 9);
   rect(-7, -5, 12, 13);
   rect(-5, -6, 8, 15);
   // Started level with the belly rather than below it, so the coat runs
   // unbroken from body into leg. Beginning it a pixel lower drew the leg its
   // own lid and hung four outlined boxes under the animal.
-  leg(-8, 5 - liftB, 4, 10);
-  leg(3, 5 - liftA, 4, 10);
+  leg(-9, 5 - liftB, 4, 10);
+  leg(4, 5 - liftA, 4, 10);
   head(3, -13, 7, 12);
   head(5, -15, 5, 8);
   head(4, -19, 8, 6);
@@ -1156,11 +1194,11 @@ function drawPlayer(playerX, playerY) {
   // cheek, throat and leg shadows are what give each mass a near and a far
   // side; the far ear is shaded whole, which is all a second ear needs.
   ctx.fillStyle = '#bbd';
-  rect(-9, 3, 16, 3);
+  rect(-9, 3, 17, 3);
   rect(-7, 6, 12, 2);
   rect(-5, 8, 8, 1);
-  leg(-8, 5 - liftB, 1, 10);
-  leg(3, 5 - liftA, 1, 10);
+  leg(-9, 5 - liftB, 1, 10);
+  leg(4, 5 - liftA, 1, 10);
   head(6, -13, 8, 1);
   head(8, -8, 2, 7);
   head(2, -26, 2, 7);
@@ -1170,8 +1208,8 @@ function drawPlayer(playerX, playerY) {
   // Two padded toes rather than a hoof: llamas walk on pads, and the split is
   // the one place the species shows below the knee.
   ctx.fillStyle = '#669';
-  leg(-8, 12 - liftB, 4, 3);
-  leg(3, 12 - liftA, 4, 3);
+  leg(-9, 12 - liftB, 4, 3);
+  leg(4, 12 - liftA, 4, 3);
   if (!away) {
     ctx.fillStyle = '#eab';
     head(12, -15, 2, 2);
@@ -1183,10 +1221,10 @@ function drawPlayer(playerX, playerY) {
   // behind the ears down the crest and onto the back, stepping back a pixel a
   // strand, which is what makes it hang rather than stripe. There is no
   // forelock: a fringe over the brow is a horse's, and it buried the ears.
-  MANE.forEach(([ox, oy, width, height], strand) => {
+  for (let strand = 0; strand < MANE.length; strand++) {
     ctx.fillStyle = RAINBOW[strand];
-    head(ox + swing, oy, width, height);
-  });
+    mane(strand, 0);
+  }
 
   // Horn last, so it crosses in front of the fleece. Its ink is re-laid here
   // rather than in the silhouette pass because the fleece is drawn over the top
@@ -1214,31 +1252,53 @@ function drawPlayer(playerX, playerY) {
   // Drawn past the invulnerability flicker: the frames just after a hit are
   // exactly when the player needs to be able to count what is left.
   ctx.globalAlpha = 1;
-  drawPips(x, y - 37, player.health, PLAYER_MAX_HEALTH, '#5ff2dd');
+  drawPips(x, y - 37, player.health, PLAYER_MAX_HEALTH, '#5fd');
 }
 
 /**
- * One continuous beam, not a row of beads: an additive halo underneath so it
- * reads as light rather than as a painted stripe, then the solid beam with the
- * spectrum scrolling away down its length, then a white core hot enough to
- * blow out. The muzzle flare at the horn sells the llamacorn as the source.
+ * One continuous beam, not a row of beads: one pixel of ink, then the spectrum
+ * scrolling away down its length, then a white core hot enough to blow out.
+ * The additive halo it used to carry is gone. It ran straight down the ray, so
+ * once the beam bent at the muzzle it glowed where there was no laser, and
+ * drawn as an outer layer instead it thickened the edge to three pixels — which
+ * is the one thing nothing in this world is allowed to do.
+ *
+ * The beam is two straight runs, not one. Its ray has to start at the
+ * llamacorn's own position, because that is the ray the hit test measures
+ * against and the one that puts the beam across the middle of a Construct
+ * rather than over its head — every sprite in this game is drawn standing above
+ * its world position, so a beam raised to head height would burn things it
+ * visibly passed over. But the horn is two dozen units above that, and a laser
+ * that leaves the chest while the horn flares is two unrelated effects. So a
+ * short spout carries it from the horn down onto the ray, and it runs true from
+ * the joint outwards: the laser bends once, at the muzzle, where a bend reads
+ * as the horn throwing it rather than as a mistake.
  */
 function drawLaser(playerX, playerY) {
   if (!laser.active) return;
-  const direction = [laser.directionX, laser.directionY];
-  ctx.globalCompositeOperation = 'lighter';
-  ctx.globalAlpha = 0.03;
-  drawBeam(playerX, playerY, ...direction, 11, LASER_REACH, [[15, '#5a4478']]);
-  ctx.globalCompositeOperation = 'source-over';
-  ctx.globalAlpha = 1;
-  drawBeam(
-    playerX, playerY, ...direction, 11, LASER_REACH,
-    [[9, INK], [7, RAINBOW], [3, HOT]], gameTime * 26,
-  );
-  const muzzleX = pixelX(playerX + (laser.directionX < 0 ? -10 : 10));
-  const muzzleY = pixelY(playerY - 23);
-  ctx.fillStyle = HOT;
-  ctx.fillRect(muzzleX - 2, muzzleY - 2, 5, 5);
+  const phase = gameTime * 26;
+  const hornX = playerX + (laser.directionX < 0 ? -10 : 10);
+  const hornY = playerY - 22;
+  // The joint has to be far enough out that the spout leaves the horn nearly
+  // parallel to the ray. Meeting the ray close to the animal put a sixty-degree
+  // corner in it, and a corner that sharp is not a bend — it is two beams.
+  const joint = Math.min(90, laser.reach);
+  const spoutX = playerX + laser.directionX * joint - hornX;
+  const spoutY = playerY + laser.directionY * joint - hornY;
+  const spout = Math.hypot(spoutX, spoutY);
+
+  // One layer at a time across both runs, for exactly the reason drawBeam works
+  // one layer at a time along a single run: give each run its own full set of
+  // layers and the second run's ink backing buries the first run's colour where
+  // they meet, which draws a dark bar across the joint and splits the laser
+  // into two beams laid end to end. Layer by layer there is no seam to see.
+  for (const layer of [[9, INK], [7, RAINBOW], [3, HOT]]) {
+    drawBeam(hornX, hornY, spoutX / spout, spoutY / spout, 0, spout, [layer], phase);
+    drawBeam(
+      playerX, playerY, laser.directionX, laser.directionY,
+      joint - 2, laser.reach, [layer], phase,
+    );
+  }
 }
 
 /**
