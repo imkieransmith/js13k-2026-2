@@ -143,6 +143,7 @@ const player = {
   hitEffect: 0,
   hurtGlow: 0,
   tuck: 0,
+  walk: 0,
 };
 
 const camera = { x: player.x, y: player.y, previousX: player.x, previousY: player.y };
@@ -291,6 +292,13 @@ function updatePlayer(dt) {
   // The gait is driven by distance travelled, not by elapsed time, so the legs
   // stay in step with the ground at every speed instead of skating.
   player.step += Math.hypot(player.vx, player.vy) * dt;
+  // How much of the walk cycle to apply, chased rather than switched. The phase
+  // comes from distance and so stops dead when the animal does, but the
+  // amplitude used to stop dead with it, which popped the body and all four
+  // legs to neutral in a single frame the moment you let go of a key. Easing
+  // this instead lets the cycle settle out of whatever pose it was caught in.
+  const striding = Math.hypot(player.vx, player.vy) > 12 && !player.dashTime;
+  player.walk += ((striding ? 1 : 0) - player.walk) * Math.min(1, dt * 12);
 
   for (const trail of trails) trail.life -= dt;
   while (trails[0] && trails[0].life <= 0) trails.shift();
@@ -1155,10 +1163,9 @@ function drawPlayer(playerX, playerY) {
   // A trot: the diagonal pairs swap, which is what a llama actually does and is
   // the only leg pattern still legible when a leg is six pixels wide. Driving
   // it from distance travelled rather than from the clock means it cannot
-  // skate, and a one-pixel body bob at the top of the stride sells the cycle.
-  const gait = Math.hypot(player.vx, player.vy) > 12 && !player.dashTime
-    ? Math.sin(player.step * 0.1)
-    : 0;
+  // skate.
+  const stride = player.step * 0.1;
+  const gait = Math.sin(stride) * player.walk;
   const lift = Math.round(gait * 2);
   // A lifted leg is drawn higher, not shorter: its top slides up under the
   // belly where nothing can see it, and only the foot leaves the ground.
@@ -1166,7 +1173,16 @@ function drawPlayer(playerX, playerY) {
   const liftB = Math.max(0, -lift);
   // Dashing lifts the whole animal clear of the ground instead of animating
   // it, so the dash reads as a glide and not as a very fast walk.
-  const bodyY = y + (player.dashTime ? -2 : Math.abs(gait) > 0.72 ? -1 : 0);
+  // The barrel rises twice a stride, once for each diagonal pair taking the
+  // weight. Its own cosine at double the leg frequency, rather than the size of
+  // the leg swing: the swing's peak is the same height whichever pair is up, so
+  // reading the bob off its magnitude puts a cusp at every zero crossing, and a
+  // cusp one pixel tall is a flicker. Two pixels of travel rather than one is
+  // the other half of it — a single pixel can only ever be up or down, which is
+  // a square wave however smooth the number driving it, where three positions
+  // read as an arc.
+  const bob = (1 - Math.cos(stride * 2)) / 2 * player.walk;
+  const bodyY = y + (player.dashTime ? -2 : -Math.round(bob * 2));
 
   // Where the head leans is the only facing cue there is, so it does the whole
   // job: reaching down and forward when the llamacorn faces the camera, drawn
