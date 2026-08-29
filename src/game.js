@@ -28,6 +28,32 @@ const ATTACK_ARC = Math.PI / 2;
 const LASER_MAX_CHARGE = 5;
 const LASER_HIT_CHARGE = 0.5;
 const LASER_WIDTH = 7;
+// TODO: remove before shipping. Debug only, so the beam can be fired without
+// grinding melee hits out of a Construct first. The shipping value is 0 — the
+// laser is supposed to be something you earn during a fight, not something you
+// arrive holding.
+const DEBUG_START_CHARGE = LASER_MAX_CHARGE;
+// Juice dials, deliberately set past the ceiling. Finding what is too much and
+// coming down lands somewhere honest; creeping up from nothing always stops at
+// the first value that is merely acceptable. Every one of these is expected to
+// halve, roughly, once we have watched it.
+const SHAKE_HIT = 12;
+const SHAKE_KILL = 32;
+const SHAKE_HURT = 30;
+const SHAKE_LASER = 24;
+// Shake bleeds off at a fixed rate rather than a fixed duration, so raising an
+// amplitude lengthens the shake as well as widening it. At these numbers a kill
+// rings for most of a second, which is its own dial.
+const SHAKE_DECAY = 34;
+// The laser's ignition flare: how long it runs, how far the view punches in,
+// and how much fatter the beam is while it lasts.
+const PUNCH_TIME = 0.22;
+const PUNCH_ZOOM = 0.16;
+const PUNCH_WIDTH = 4;
+// How far the beam takes to come up to full opacity. Without it the muzzle end
+// is a cut edge — an obvious rectangle with an outline drawn round it, which is
+// the one place the beam looks drawn rather than emitted.
+const BEAM_FADE = 26;
 const MELEE_WINDUP = 0.45;
 const RANGED_WINDUP = 0.62;
 const ENEMY_ATTACK_EFFECT = 0.16;
@@ -107,6 +133,7 @@ const player = {
   health: PLAYER_MAX_HEALTH,
   invulnerability: 0,
   hitEffect: 0,
+  hurtGlow: 0,
 };
 
 const camera = { x: player.x, y: player.y, previousX: player.x, previousY: player.y };
@@ -118,7 +145,7 @@ const aim = {
 };
 const pointer = { x: 0, y: 0, seen: false };
 const attack = { time: 0, cooldown: 0, directionX: 0, directionY: 1, hits: 0 };
-const laser = { charge: 0, held: false, active: false, directionX: 0, directionY: 1, reach: 0 };
+const laser = { charge: DEBUG_START_CHARGE, held: false, active: false, directionX: 0, directionY: 1, reach: 0, punch: 0 };
 const ENEMY_SPAWNS = level.enemies;
 const makeEnemies = () => ENEMY_SPAWNS.map(([x, y, type], id) => ({
   id, type, x, y, previousX: x, previousY: y, homeX: x, homeY: y,
@@ -354,7 +381,8 @@ function damagePlayer(sourceX, sourceY) {
   player.health--;
   player.invulnerability = 0.7;
   player.hitEffect = 0.18;
-  shake = Math.max(shake, 8);
+  shake = Math.max(shake, SHAKE_HURT);
+  player.hurtGlow = 1;
   updateHud();
   if (!player.health) resetQueued = true;
 }
@@ -372,7 +400,7 @@ function hurtEnemy(enemy, knockX, knockY) {
   enemy.hitEffect = 0.16;
   enemy.knockX = knockX;
   enemy.knockY = knockY;
-  shake = Math.max(shake, enemy.health ? 3 : 9);
+  shake = Math.max(shake, enemy.health ? SHAKE_HIT : SHAKE_KILL);
   if (!enemy.health) {
     enemy.death = CONSTRUCT_DEATH;
     enemy.windup = enemy.attackEffect = 0;
@@ -413,8 +441,18 @@ function hitEnemies() {
 
 function updateLaser(dt) {
   for (const enemy of enemies) enemy.laserCooldown = Math.max(0, enemy.laserCooldown - dt);
+  const wasActive = laser.active;
   laser.active = laser.held && laser.charge > 0;
   if (!laser.active) return;
+  // One kick as the beam lights, and nothing while it burns. Shake in this game
+  // is punctuation — it means something just landed — and a beam that shakes for
+  // as long as it is held turns it into weather. Worse, the laser already shakes
+  // on every hit it lands through hurtEnemy, so a sustained floor would be the
+  // one thing that hides its own hits.
+  if (!wasActive) {
+    shake = Math.max(shake, SHAKE_LASER);
+    laser.punch = PUNCH_TIME;
+  }
 
   laser.directionX = player.facingX;
   laser.directionY = player.facingY;
@@ -574,7 +612,8 @@ function resetEncounter() {
   player.hitEffect = 0;
   player.dashTime = player.dashCooldown = 0;
   attack.time = attack.cooldown = attack.hits = 0;
-  laser.charge = 0;
+  laser.charge = DEBUG_START_CHARGE;
+  laser.punch = player.hurtGlow = 0;
   laser.held = laser.active = false;
   trails.length = 0;
   enemies = makeEnemies();
@@ -592,7 +631,12 @@ function update(dt) {
   // Rendering interpolates these fixed simulation samples. Without the older
   // sample, high-refresh displays alternate between still and double steps.
   gameTime += dt;
-  shake = Math.max(0, shake - dt * 34);
+  shake = Math.max(0, shake - dt * SHAKE_DECAY);
+  // Both flares decay here rather than where they are set, so they keep running
+  // after the thing that caused them has stopped — the laser's ignition outlives
+  // a tap on the trigger, and the hurt glow outlives the frame of the hit.
+  laser.punch = Math.max(0, laser.punch - dt);
+  player.hurtGlow = Math.max(0, player.hurtGlow - dt * 1.6);
   player.previousX = player.x;
   player.previousY = player.y;
   camera.previousX = camera.x;
@@ -659,13 +703,21 @@ function paintOf(paint, amount) {
  * runs the full length, so the beam gets one even outline down its whole edge
  * rather than an outline around every stamp.
  */
-function drawBeam(x, y, dirX, dirY, from, to, layers, phase = 0, step = 2) {
+function drawBeam(x, y, dirX, dirY, from, to, layers, phase = 0, step = 2, fade = 0) {
   // Each layer runs the whole length before the next one starts. Drawing every
   // layer per stamp instead lets the next stamp's backing bury the previous
   // stamp's colour, which leaves a dark line with slivers of colour trapped in
   // it rather than a coloured beam with one dark edge.
   for (const [size, paint] of layers) {
     for (let distance = from; distance < to; distance += step) {
+      // Stamps are far wider than their spacing, so a stamp lands on roughly
+      // size/step of its neighbours. Painting them at the opacity we actually
+      // want would compound to near-solid within a few pixels and turn the ramp
+      // into a blotchy step. Taking that root gives each stamp the share that
+      // composites up to the opacity we asked for.
+      if (fade) {
+        ctx.globalAlpha = 1 - (1 - Math.min(1, (distance - from) / fade)) ** (step / size);
+      }
       ctx.fillStyle = paintOf(paint, distance / 4 + phase);
       ctx.fillRect(
         pixelX(x + dirX * distance) - (size >> 1),
@@ -674,6 +726,7 @@ function drawBeam(x, y, dirX, dirY, from, to, layers, phase = 0, step = 2) {
       );
     }
   }
+  ctx.globalAlpha = 1;
 }
 
 /**
@@ -1284,9 +1337,16 @@ function drawLaser(playerX, playerY) {
   const endX = playerX + laser.directionX * run - hornX;
   const endY = playerY + laser.directionY * run - hornY;
   const length = Math.hypot(endX, endY);
+  // Ink, then white, then the spectrum, then a white core: a dark rim to hold
+  // the shape against pale stone, and a hot rim inside it because that is what
+  // separates a beam from a painted stripe. The ink alone was legible; the ink
+  // and the white together are a laser. The whole thing swells for the length
+  // of the ignition flare, so the shot arrives rather than appearing.
+  const grow = Math.round(laser.punch / PUNCH_TIME * PUNCH_WIDTH);
   drawBeam(
     hornX, hornY, endX / length, endY / length, 0, length,
-    [[9, INK], [7, RAINBOW], [3, HOT]], gameTime * 26,
+    [[11 + grow, INK], [9 + grow, HOT], [7 + grow, RAINBOW], [3 + grow, HOT]],
+    gameTime * 26, 2, BEAM_FADE,
   );
 }
 
@@ -1407,6 +1467,41 @@ function buildGrade() {
   grade.addColorStop(1, '#334b53');
 }
 
+/**
+ * A wash of light pulled in from the frame edges. This lives on the canvas
+ * rather than in the DOM despite the HUD rule, because it is not a HUD element:
+ * it is the same class of thing as the colour grade directly above it — a lens
+ * effect over the whole scene — and it has to sit in a known place in that
+ * order. A DOM overlay would always land on top of the grade, and could never
+ * be seen in a headless preview, which is the only way we can look at any of
+ * this.
+ *
+ * Added rather than blended, which is what lets the centre be a true no-op:
+ * adding black changes nothing, so the play area is untouched no matter how
+ * hard the edges burn, and the strength is honest `globalAlpha` rather than a
+ * per-stop alpha ramp. `paint` is a flat colour, or the spectrum itself for the
+ * laser, banded outward from the play area to the corners.
+ */
+function drawVignette(paint, amount) {
+  if (amount <= 0) return;
+  const radius = Math.hypot(screenWidth, screenHeight) / 2;
+  const wash = ctx.createRadialGradient(
+    screenWidth / 2, screenHeight / 2, radius * 0.4,
+    screenWidth / 2, screenHeight / 2, radius,
+  );
+  wash.addColorStop(0, '#000');
+  if (typeof paint === 'string') wash.addColorStop(1, paint);
+  else for (let band = 0; band < paint.length; band++) {
+    wash.addColorStop(0.45 + 0.55 * band / (paint.length - 1), paint[band]);
+  }
+  ctx.globalAlpha = Math.min(1, amount);
+  ctx.globalCompositeOperation = 'lighter';
+  ctx.fillStyle = wash;
+  ctx.fillRect(0, 0, screenWidth, screenHeight);
+  ctx.globalCompositeOperation = 'source-over';
+  ctx.globalAlpha = 1;
+}
+
 function draw() {
   const dpr = devicePixelRatio || 1;
   const alpha = accumulator / FIXED_STEP;
@@ -1415,8 +1510,15 @@ function draw() {
   // Render-only shake keeps collision and camera follow stable. Clamping the
   // shaken sample prevents impacts near a map edge exposing the canvas void.
   const limits = cameraLimits();
-  const viewX = clamp(cameraX + Math.sin(gameTime * 137) * shake / zoom, limits.minX, limits.maxX);
-  const viewY = clamp(cameraY + Math.sin(gameTime * 191) * shake / zoom, limits.minY, limits.maxY);
+  // The ignition also drives the lens. Zoom is a channel nothing else in the
+  // game touches, which is the whole point of spending it here: shake already
+  // means four different things, and a fifth would have made it mean none.
+  // Render-only again, and inward only — a wider view than `zoom` would put the
+  // canvas void past the camera limits, which are sized for `zoom` exactly.
+  const punch = laser.punch / PUNCH_TIME;
+  const viewZoom = zoom * (1 + punch * PUNCH_ZOOM);
+  const viewX = clamp(cameraX + Math.sin(gameTime * 137) * shake / viewZoom, limits.minX, limits.maxX);
+  const viewY = clamp(cameraY + Math.sin(gameTime * 191) * shake / viewZoom, limits.minY, limits.maxY);
   const playerX = player.previousX + (player.x - player.previousX) * alpha;
   const playerY = player.previousY + (player.y - player.previousY) * alpha;
   const aimX = aim.previousX + (aim.x - aim.previousX) * alpha;
@@ -1424,9 +1526,9 @@ function draw() {
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.fillStyle = '#0b161b';
   ctx.fillRect(0, 0, screenWidth, screenHeight);
-  renderScale = dpr * zoom;
-  renderOffsetX = Math.round((screenWidth / 2 - viewX * zoom) * dpr);
-  renderOffsetY = Math.round((screenHeight / 2 - viewY * zoom) * dpr);
+  renderScale = dpr * viewZoom;
+  renderOffsetX = Math.round((screenWidth / 2 - viewX * viewZoom) * dpr);
+  renderOffsetY = Math.round((screenHeight / 2 - viewY * viewZoom) * dpr);
   ctx.setTransform(
     renderScale, 0, 0, renderScale,
     renderOffsetX, renderOffsetY,
@@ -1476,6 +1578,11 @@ function draw() {
   ctx.fillStyle = grade;
   ctx.fillRect(0, 0, screenWidth, screenHeight);
   ctx.globalCompositeOperation = 'source-over';
+  // Over the grade, not under it: these are the frame reacting, and the grade
+  // is the frame. Hurt last, because being hit outranks everything else on
+  // screen — including your own laser going off.
+  drawVignette(RAINBOW, (laser.active ? 0.5 : 0) + punch * 0.6);
+  drawVignette('#e94863', player.hurtGlow * 0.9);
 }
 
 function frame(now) {
