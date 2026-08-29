@@ -1169,6 +1169,24 @@ function drawPlayer(playerX, playerY) {
   const away = player.facingY < -0.45;
   const toward = player.facingY > 0.45;
   const swing = away ? 3 : 0;
+  // Where the ears sit relative to the horn, per pose. Looking up you are seeing
+  // the back of the skull, so the ears crowd the horn and tuck a column under
+  // it; looking down the skull has rotated far enough that the pair passes
+  // behind the horn and comes out the other side, so the far ear is the one
+  // against the horn and the near ear is outermost. Three positions is what
+  // stops the ears reading as a decal stuck to a head that turns underneath
+  // them.
+  //
+  // Side on sits between the two, and it has to, or sweeping the aim jumps the
+  // pair two columns at once. There are no half pixels to split the difference
+  // with — everything here is rounded to the device grid after the camera
+  // transform, so a half unit is not a half step, it is a pixel that picks a
+  // side depending on where the camera happens to be and twitches while you
+  // walk. The half step that does exist is made of ink: at 4 the ear's outline
+  // and the horn's meet, which reads as a seam between them, where at 3 a
+  // column of open ground shows through and reads as a gap.
+  const earX = away ? 5 : toward ? 3 : 4;
+  const earFar = toward ? 6 : earX - 2;
   const leanX = away ? -2 : toward ? 1 : 0;
   const leanY = away ? -2 : toward ? 2 : 0;
   const rect = (ox, oy, width, height) => spriteRect(x, bodyY, flip, ox, oy, width, height);
@@ -1226,10 +1244,16 @@ function drawPlayer(playerX, playerY) {
   head(3, -20, 10, 8);
   head(4, -21, 8, 10);
   head(10, -17, 6, 7);
-  // The ears are the whole decision in four rectangles: long, upright and
-  // splayed into a near and a far one, which is the read no horse can give.
-  head(1, -26, 8, 8);
-  head(2, -27, 5, 3);
+  // Two upright ears, one rectangle each. The far one is a single column of
+  // colour rather than two: it is half behind its neighbour, so the near ear's
+  // own outline is the line between them and the far ear is the sliver that
+  // shows past it. A row shorter as well, which is what perspective does to it
+  // and what keeps the pair from roofing over into one block. Both ink rects
+  // run three rows below the colour, down into the skull — the mane is the only
+  // part of the head that moves on its own, so anything standing on the crest
+  // has to reach the bone itself or it is left hanging when the mane swings.
+  head(earFar - 1, -24, 3, 7);
+  head(earX - 1, -25, 4, 8);
   // The fleece is outlined with the rest of the silhouette rather than after
   // it, because ink laid over a finished coat leaves a dark seam wherever the
   // two meet.
@@ -1250,7 +1274,7 @@ function drawPlayer(playerX, playerY) {
   head(4, -19, 8, 6);
   head(5, -20, 6, 8);
   head(11, -16, 4, 5);
-  head(5, -26, 3, 7);
+  head(earX, -24, 2, 5);
 
   // A shaded belly and a lit spine keep the coat from reading as a flat cut-out
   // and put the light on the llamacorn where it is on everything else. The
@@ -1264,7 +1288,7 @@ function drawPlayer(playerX, playerY) {
   leg(4, 5 - liftA, 1, 10);
   head(6, -13, 8, 1);
   head(8, -8, 2, 7);
-  head(2, -26, 2, 7);
+  head(earFar, -23, 1, 4);
   ctx.fillStyle = HOT;
   rect(-5, -6, 8, 1);
   rect(-7, -5, 12, 1);
