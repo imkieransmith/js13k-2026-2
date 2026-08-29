@@ -69,16 +69,18 @@ You may still submit a PR to fix critical issues that prevent your game from bei
 
 
 ## The game
-- A 13kb unicorn clone of Hyper Light Drifter.
+- A 13kb llamacorn clone of Hyper Light Drifter.
 - Easier combat, tuned for judges to have fun stomping bad guys.
 - Programmatic level generation is core to levels, eg I can say “this tile is grass”, and the game has a concise function to draw some for me. Repeatable nicely.
 - Properly scoped: ~3 mini levels, one boss. Plus one wave arena or something if there is space.
-- Player character is a unicorn, melee attack with horn, charges your rainbow laser ranged weapon.
+- Player character is a llamacorn, melee attack with horn, charges your rainbow laser ranged weapon.
+- The llamacorn is a deliberate choice, not a drifting one. A horse build reads as a llama at this sprite size anyway — a twenty-pixel barrel cannot be long enough to be equine without eating the screen, and what is left is a short body under a tall neck. Leaning in keeps the theme outright (horn, rainbow), costs a few pixels of ear, and gives us a silhouette nobody else in the jam will have. Do not quietly redraw it as a horse.
+- The setting reads Andean for free: pale terraced stone on green plateaus is already what the terrain draws. Any nod to it should stay in the level layouts, not in new art or palette code — there is no size budget for either.
 - Movement is tight; dash, rainbow bridge across gaps, etc.
 - Something that captures HLD and makes you think what the game could be past a 13kb restriction.
 
 - The setting is generally grass, water, ruins/rubble, very HLD. An overgrown sacred landscape that has fallen apart. Think broad green plateaus, brilliant blue water, collapsed white-stone temples, broken bridges, half-buried statues, strange geometric machinery still humming in the ruins.
-- The player-unicorn fights Constructs; ancient stone/prismatic machines that still defend parts of the landscape. Imagine floating cubes or walker/crab/turtle style cubes. Great excuse for simple geometric sprites and very readable attack patterns.
+- The player-llamacorn fights Constructs; ancient stone/prismatic machines that still defend parts of the landscape. Imagine floating cubes or walker/crab/turtle style cubes. Great excuse for simple geometric sprites and very readable attack patterns.
 
 
 ## Development tooling
@@ -116,7 +118,7 @@ Do not apply CSS styling in the JS if it can be avoided. Prefer adding/removing 
 Prefer UI/HUD elements in the DOM where possible and sensible.
 
 The one deliberate exception is the player readout. There is no HUD panel: health
-is pips drawn over the unicorn and each Construct and hidden while they are
-untouched, and rainbow-laser charge is the unicorn's own tail, filling with
+is pips drawn over the llamacorn and each Construct and hidden while they are
+untouched, and rainbow-laser charge is the llamacorn's own tail, filling with
 colour and draining to grey. The DOM keeps only an off-screen live region so a
 screen reader still gets health. Do not reintroduce a corner panel.

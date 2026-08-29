@@ -51,7 +51,7 @@ const SHAFT_SKEW = 0.55;
 // sweep and laser. Sharing it is what makes them read as the same magic rather
 // than as five effects that happen to be colourful.
 const RAINBOW = ['#ff7ab0', '#ffc55c', '#fff3a6', '#8ce6a0', '#6fc8f5', '#b48cf0'];
-// Two dark inks, one warm for the unicorn and its magic and one cool for the
+// Two dark inks, one warm for the llamacorn and its magic and one cool for the
 // stone Constructs. Every sprite and effect is built silhouette-first out of
 // these, so a single pixel of ink shows around each shape: the reference art
 // outlines everything at exactly one pixel, and a thicker border is the single
@@ -66,7 +66,17 @@ const MAGIC_HOT = '#ffd9f5';
 // Floor-slab light, body, carving and wall shadow. Constructs look torn from
 // the same temple tiles rather than assembled from generic grey machinery.
 const STONE = ['#dbd8bf', '#cbc8b0', '#969584', '#687c74'];
-const TAIL_SEGMENTS = 8;
+// One tail band per landed hit in a full charge, so a hit always lights
+// exactly one more band. A meter whose steps do not divide evenly into the
+// thing filling it leaves hits that visibly do nothing.
+const TAIL_SEGMENTS = LASER_MAX_CHARGE / LASER_HIT_CHARGE;
+// The plume swells through its middle and tapers at the tip. A tail of even
+// width is a progress bar with a horse attached; the taper is what lets it be
+// large enough to read a ten-step gauge at 2x and still look like hair.
+const TAIL_WIDTHS = [3, 5, 6, 7, 7, 6, 5, 4, 3, 2];
+// The rainbow fleece, as offsets from the head: six strands stepping back and
+// down the crest from behind the ears onto the back.
+const MANE = [[1, -20, 5, 3], [0, -17, 5, 3], [-1, -14, 5, 3], [-2, -11, 6, 3], [-3, -8, 6, 3], [-4, -5, 6, 3]];
 
 let screenWidth = 1;
 let screenHeight = 1;
@@ -94,6 +104,7 @@ const player = {
   dashTime: 0,
   dashCooldown: 0,
   trailClock: 0,
+  step: 0,
   health: PLAYER_MAX_HEALTH,
   invulnerability: 0,
   hitEffect: 0,
@@ -127,6 +138,7 @@ let dashBuffer = 0;
 let attackBuffer = 0;
 let resetQueued = false;
 let gameTime = 0;
+let shake = 0;
 let hudHealth = -1;
 
 const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
@@ -235,6 +247,10 @@ function updatePlayer(dt) {
   if (blocked & 1) player.vx = 0;
   if (blocked & 2) player.vy = 0;
 
+  // The gait is driven by distance travelled, not by elapsed time, so the legs
+  // stay in step with the ground at every speed instead of skating.
+  player.step += Math.hypot(player.vx, player.vy) * dt;
+
   for (const trail of trails) trail.life -= dt;
   while (trails[0] && trails[0].life <= 0) trails.shift();
 }
@@ -336,6 +352,7 @@ function damagePlayer(sourceX, sourceY) {
   player.health--;
   player.invulnerability = 0.7;
   player.hitEffect = 0.18;
+  shake = Math.max(shake, 8);
   updateHud();
   if (!player.health) resetQueued = true;
 }
@@ -353,6 +370,7 @@ function hurtEnemy(enemy, knockX, knockY) {
   enemy.hitEffect = 0.16;
   enemy.knockX = knockX;
   enemy.knockY = knockY;
+  shake = Math.max(shake, enemy.health ? 3 : 9);
   if (!enemy.health) {
     enemy.death = CONSTRUCT_DEATH;
     enemy.windup = enemy.attackEffect = 0;
@@ -571,6 +589,7 @@ function update(dt) {
   // Rendering interpolates these fixed simulation samples. Without the older
   // sample, high-refresh displays alternate between still and double steps.
   gameTime += dt;
+  shake = Math.max(0, shake - dt * 34);
   player.previousX = player.x;
   player.previousY = player.y;
   camera.previousX = camera.x;
@@ -655,7 +674,7 @@ function drawBeam(x, y, dirX, dirY, from, to, layers, phase = 0, step = 2) {
 }
 
 /**
- * Stamp a tapered crescent along an arc: the unicorn's horn sweep and the
+ * Stamp a tapered crescent along an arc: the llamacorn's horn sweep and the
  * Constructs' melee telegraph are the same blade with different paint. The
  * taper puts the mass in the middle of the swing, which is what separates a
  * slash from a drawn circle segment, and `from`/`to` let the caller sweep the
@@ -831,12 +850,14 @@ function drawEnemyDeath(enemy, x, y) {
     ctx.fillRect(puffX - (width >> 1) + (puff & 1 ? 1 : -1), puffY + 1, width, Math.max(2, size - 3));
   }
 
-  ctx.globalAlpha = Math.min(1, (1 - progress) * 1.8);
+  ctx.globalAlpha = Math.min(1, progress * 7, (1 - progress) * 1.8);
   for (let chip = 0; chip < 16; chip++) {
     const noise = hash(enemy.id, chip, 131);
     const size = 3 + (noise >>> 16 & 3);
-    const chipX = Math.round(x + (noise % 35 - 17) * progress * 2.6);
-    const chipY = Math.round(y - 5 - (14 + (noise >>> 8) % 24) * progress + 48 * progress * progress);
+    // Chips begin distributed across the shell, then peel away from those same
+    // positions; the body therefore becomes rubble instead of swapping to it.
+    const chipX = Math.round(x + (noise >>> 5) % 29 - 14 + (noise % 35 - 17) * progress * 2.6);
+    const chipY = Math.round(y + (noise >>> 10) % 21 - 10 - (14 + (noise >>> 8) % 24) * progress + 48 * progress * progress);
     ctx.fillStyle = STONE_INK;
     ctx.fillRect(chipX - 1, chipY - 1, size + 2, size + 2);
     ctx.fillStyle = STONE[(noise >>> 18) % 3];
@@ -852,7 +873,7 @@ function drawEnemy(enemy, x, y) {
   // The shadow drains with the death smoke instead of vanishing one frame
   // after it; living atmosphere remains visible while the body hurt-flashes.
   drawShadow(x, y + 12, enemy.type ? 13 : 16, enemy.health ? 0.22 : 0.22 * enemy.death / CONSTRUCT_DEATH);
-  if (!enemy.health) ctx.globalAlpha = clamp(enemy.death / CONSTRUCT_DEATH * 4 - 3, 0, 1);
+  if (!enemy.health) ctx.globalAlpha = clamp(enemy.death / CONSTRUCT_DEATH * 2.5 - 1.5, 0, 1);
   else if (enemy.hurt && (enemy.hurt * 24 | 0) & 1) ctx.globalAlpha = 0.35;
 
   if (!enemy.type) {
@@ -960,109 +981,247 @@ function drawProjectiles(alpha) {
 }
 
 /**
- * The tail is the rainbow meter. It fills from the rump outward as the horn
+ * Every part of the llamacorn is authored facing right and mirrored here, so
+ * one set of offsets draws both directions and they can never drift apart.
+ * `ox` runs forward along the facing, which is why nothing below multiplies by
+ * the flip itself: mirroring a rectangle moves its far edge, not its origin.
+ */
+function spriteRect(x, y, flip, ox, oy, width, height) {
+  ctx.fillRect(flip > 0 ? x + ox : x - ox - width, y + oy, width, height);
+}
+
+/**
+ * The tail is the rainbow meter. It fills from the dock outward as the horn
  * lands hits and drains back to grey as the laser burns the charge off, which
  * puts the one resource the player spends on the character they are already
  * watching instead of in a corner of the screen they are not.
+ *
+ * Because it is the entire HUD it is drawn as a heavy fleece plume: ten bands
+ * have to stay countable at 2x zoom, in peripheral vision, while the player is
+ * dodging. Spent bands are one flat grey rather than two alternating ones —
+ * banding the empty half turned the tail into a ladder, and there is nothing
+ * to count there anyway. The filled half is where the reading happens.
  */
 function drawTail(x, y, flip) {
   const filled = Math.ceil(laser.charge / LASER_MAX_CHARGE * TAIL_SEGMENTS);
-  // One silhouette laid down for the whole tail before any segment is filled,
-  // exactly as the body is built. Giving each segment its own outline instead
+  // One silhouette laid down for the whole plume before any band is filled,
+  // exactly as the body is built. Giving each band its own outline instead
   // walls them off from each other and the meter reads as a stack of blocks
-  // parked beside the unicorn rather than as its tail.
+  // parked beside the llamacorn rather than as its tail.
   for (let pass = 0; pass < 2; pass++) {
     for (let segment = 0; segment < TAIL_SEGMENTS; segment++) {
-      const size = (pass ? 4 : 6) - (segment >> 1);
-      const tailX = x - flip * (10 + (segment >> 1));
+      const width = TAIL_WIDTHS[segment];
+      const grow = pass ? 0 : 1;
+      // Flush with the barrel's outline at the dock, drifting back a pixel
+      // every four bands. The plume is drawn before the body, so the dock is
+      // buried and the tail grows out of the rump rather than resting on it.
+      const back = -10 - (segment >> 2);
+      // The spectrum is spread across the whole plume rather than repeated
+      // every six bands, so it reads as one rainbow being poured in from the
+      // dock instead of restarting partway down the tail.
       ctx.fillStyle = pass
-        ? segment < filled ? RAINBOW[segment % 6] : '#8b899e'
+        ? segment < filled ? RAINBOW[segment * RAINBOW.length / TAIL_SEGMENTS | 0] : '#8b899e'
         : INK;
-      ctx.fillRect(
-        tailX - (size >> 1), y - 6 + segment * 2 + pass,
-        size, pass ? 2 : 4,
+      spriteRect(
+        x, y, flip, back - width - grow, -6 + segment * 2 - grow,
+        width + grow * 2, 2 + grow * 2,
       );
     }
   }
 }
 
+/**
+ * The player: a llamacorn, and deliberately so. The horse build kept reading as
+ * a llama at this size anyway — a twenty-pixel barrel cannot be long enough to
+ * be equine without eating the screen, and what is left is a short body under a
+ * tall neck, which is a llama. Leaning in costs a few pixels of ear, keeps the
+ * theme outright (it has a horn and it fires a rainbow), and gives the game a
+ * silhouette nobody else in the jam will have. The ruins it walks through are
+ * already pale terraced stone on green plateaus, so the setting needs nothing.
+ *
+ * Built silhouette-first like everything else in the world: the whole shape is
+ * laid down in ink and every later rectangle insets one pixel into it, which
+ * produces an even one-pixel outline without drawing one. Masses are stacks of
+ * two or three overlapping rectangles, widest in the middle, so their corners
+ * come off without a curve ever being drawn.
+ *
+ * The coat is a cool lavender white where the ruins are a warm bone white, so
+ * the player never dissolves into the temple floor they spend the level on.
+ */
 function drawPlayer(playerX, playerY) {
+  const flip = player.facingX < 0 ? -1 : 1;
+
   // The dash leaves the body's own silhouette behind it, tinted through the
-  // spectrum. Matching the barrel rather than using a bigger block keeps the
-  // trail reading as afterimages of the unicorn instead of dropped confetti.
+  // spectrum. Matching the barrel and head rather than using a bigger block
+  // keeps the trail reading as afterimages instead of dropped confetti.
   for (let i = 0; i < trails.length; i++) {
     const trail = trails[i];
     const ghostX = pixelX(trail.x);
     const ghostY = pixelY(trail.y);
     ctx.globalAlpha = trail.life / 0.16 * 0.7;
     ctx.fillStyle = RAINBOW[i % RAINBOW.length];
-    ctx.fillRect(ghostX - 7, ghostY - 5, 14, 17);
-    // The head is thrown forward along the dash, so the ghost keeps the
-    // unicorn's outline. A bare rectangle reads as dropped confetti.
-    ctx.fillRect(ghostX + player.dashX * 5 - 4, ghostY + player.dashY * 5 - 12, 9, 12);
+    spriteRect(ghostX, ghostY, flip, -9, -6, 16, 15);
+    spriteRect(
+      ghostX + player.dashX * 4, ghostY + player.dashY * 4, flip,
+      2, -22, 12, 18,
+    );
   }
   ctx.globalAlpha = 1;
 
   const x = pixelX(playerX);
   const y = pixelY(playerY);
-  drawShadow(x, y + 12, 9);
+  drawShadow(x - flip * 2, y + 15, 11);
   ctx.globalAlpha = player.invulnerability && (player.invulnerability * 24 | 0) & 1 ? 0.35 : 1;
 
-  // Which way the head and horn lean is the only animation there is, so it
-  // carries all of the facing: aiming behind the unicorn turns it around.
-  const flip = player.facingX < 0 ? -1 : 1;
-  const lean = player.facingY < -0.45 ? -3 : player.facingY > 0.45 ? 2 : 0;
+  // A trot: the diagonal pairs swap, which is what a llama actually does and is
+  // the only leg pattern still legible when a leg is six pixels wide. Driving
+  // it from distance travelled rather than from the clock means it cannot
+  // skate, and a one-pixel body bob at the top of the stride sells the cycle.
+  const gait = Math.hypot(player.vx, player.vy) > 12 && !player.dashTime
+    ? Math.sin(player.step * 0.1)
+    : 0;
+  const lift = Math.round(gait * 2);
+  // A lifted leg is drawn higher, not shorter: its top slides up under the
+  // belly where nothing can see it, and only the foot leaves the ground.
+  const liftA = Math.max(0, lift);
+  const liftB = Math.max(0, -lift);
+  // Dashing lifts the whole animal clear of the ground instead of animating
+  // it, so the dash reads as a glide and not as a very fast walk.
+  const bodyY = y + (player.dashTime ? -2 : Math.abs(gait) > 0.72 ? -1 : 0);
 
-  const headX = x + flip * 5;
-  const headY = y - 10 + lean;
+  // Where the head leans is the only facing cue there is, so it does the whole
+  // job: reaching down and forward when the llamacorn faces the camera, drawn
+  // up and back when it turns away. Turned away the eye and nostril are hidden
+  // and the fleece swings across the face — the cheapest possible back-of-head
+  // pose, and the one thing that stops "walking north" reading as "south".
+  const away = player.facingY < -0.45;
+  const swing = away ? 3 : 0;
+  const leanX = away ? -2 : player.facingY > 0.45 ? 1 : 0;
+  const leanY = away ? -2 : player.facingY > 0.45 ? 2 : 0;
+  const rect = (ox, oy, width, height) => spriteRect(x, bodyY, flip, ox, oy, width, height);
+  const head = (ox, oy, width, height) =>
+    spriteRect(x, bodyY, flip, ox + leanX, oy + leanY, width, height);
+  // Feet stay on the ground while the barrel bobs above them.
+  const leg = (ox, oy, width, height) => spriteRect(x, y, flip, ox, oy, width, height);
 
-  // The whole silhouette is laid down first and every later shape insets one
-  // pixel into it. That is what produces an even outline without drawing one,
-  // and one pixel is the width the reference art uses: at two the sprite stops
-  // belonging to the scene and starts looking stickered onto it. Every part
-  // overlaps its neighbour, so the unicorn reads as one animal rather than as
-  // a stack of separate boxes.
-  drawTail(x, y, flip);
+  drawTail(x, bodyY, flip);
+
+  // Silhouette. Three overlapping rectangles per mass — each narrower and
+  // taller than the last — take every corner off without drawing a curve. Two
+  // was enough for a pony and still left a fridge; a llama is rounder than it
+  // is long, so the barrel needs the third.
   ctx.fillStyle = INK;
-  ctx.fillRect(x - 8, y - 6, 16, 19);
-  ctx.fillRect(headX - 5, headY - 7, 11, 13);
-  ctx.fillRect(headX + flip * 2 - 2, headY - 13, 4, 8);
-  for (const side of [-7, 3]) ctx.fillRect(x + side, y + 12, 5, 5);
+  rect(-10, -4, 18, 11);
+  rect(-8, -6, 14, 15);
+  rect(-6, -7, 10, 17);
+  // Legs are drawn as one plane, not two. An off-side pair peeking three
+  // pixels out from behind the near pair put its own outline alongside theirs,
+  // and two dark lines with a sliver of coat trapped between them read as a
+  // drawing mistake at 2x. Their volume comes from a shaded back edge instead.
+  leg(-9, 5 - liftB, 6, 11);
+  leg(2, 5 - liftA, 6, 11);
+  head(2, -14, 9, 14);
+  head(4, -16, 7, 9);
+  head(3, -20, 10, 8);
+  head(4, -21, 8, 10);
+  head(10, -17, 6, 7);
+  // The ears are the whole decision in four rectangles: long, upright and
+  // splayed into a near and a far one, which is the read no horse can give.
+  head(1, -26, 8, 8);
+  head(2, -27, 5, 3);
+  // The fleece is outlined with the rest of the silhouette rather than after
+  // it, because ink laid over a finished coat leaves a dark seam wherever the
+  // two meet.
+  for (const [ox, oy, width, height] of MANE) head(ox + swing - 1, oy - 1, width + 2, height + 2);
 
-  const coat = player.dashTime ? '#fff7bd' : '#f6f3e7';
+  const coat = player.dashTime ? '#fff7bd' : '#eef';
   ctx.fillStyle = coat;
-  ctx.fillRect(x - 7, y - 5, 14, 17);
-  ctx.fillRect(headX - 4, headY - 6, 9, 11);
-  for (const side of [-6, 4]) ctx.fillRect(x + side, y + 12, 3, 3);
-  // A shaded underside and a lit back keep the coat from reading as a flat
-  // cut-out, and put the light on the unicorn where it is on everything else.
-  ctx.fillStyle = '#c8c4d8';
-  ctx.fillRect(x - 7, y + 7, 14, 5);
-  ctx.fillStyle = '#fffdf4';
-  ctx.fillRect(x - 7, y - 5, 14, 2);
-  ctx.fillStyle = INK;
-  ctx.fillRect(headX + flip, headY - 2, 2, 2);
+  rect(-9, -3, 16, 9);
+  rect(-7, -5, 12, 13);
+  rect(-5, -6, 8, 15);
+  // Started level with the belly rather than below it, so the coat runs
+  // unbroken from body into leg. Beginning it a pixel lower drew the leg its
+  // own lid and hung four outlined boxes under the animal.
+  leg(-8, 5 - liftB, 4, 10);
+  leg(3, 5 - liftA, 4, 10);
+  head(3, -13, 7, 12);
+  head(5, -15, 5, 8);
+  head(4, -19, 8, 6);
+  head(5, -20, 6, 8);
+  head(11, -16, 4, 5);
+  head(5, -26, 3, 7);
 
-  // The mane stays a full rainbow whatever the tail is doing. It is the
-  // unicorn's identity rather than a readout, and leaving it constant gives
-  // the eye something to measure the tail's drained grey against.
-  for (let strand = 0; strand < 5; strand++) {
-    ctx.fillStyle = RAINBOW[strand];
-    ctx.fillRect(headX - flip * 3 - 1, headY - 6 + strand * 2, 3, 2);
+  // A shaded belly and a lit spine keep the coat from reading as a flat cut-out
+  // and put the light on the llamacorn where it is on everything else. The
+  // cheek, throat and leg shadows are what give each mass a near and a far
+  // side; the far ear is shaded whole, which is all a second ear needs.
+  ctx.fillStyle = '#bbd';
+  rect(-9, 3, 16, 3);
+  rect(-7, 6, 12, 2);
+  rect(-5, 8, 8, 1);
+  leg(-8, 5 - liftB, 1, 10);
+  leg(3, 5 - liftA, 1, 10);
+  head(6, -13, 8, 1);
+  head(8, -8, 2, 7);
+  head(2, -26, 2, 7);
+  ctx.fillStyle = HOT;
+  rect(-5, -6, 8, 1);
+  rect(-7, -5, 12, 1);
+  // Two padded toes rather than a hoof: llamas walk on pads, and the split is
+  // the one place the species shows below the knee.
+  ctx.fillStyle = '#669';
+  leg(-8, 12 - liftB, 4, 3);
+  leg(3, 12 - liftA, 4, 3);
+  if (!away) {
+    ctx.fillStyle = '#eab';
+    head(12, -15, 2, 2);
   }
-  ctx.fillStyle = '#ffe9a8';
-  ctx.fillRect(headX + flip * 2 - 1, headY - 12, 2, 6);
+
+  // The fleece stays a full rainbow whatever the tail is doing. It is the
+  // llamacorn's identity rather than a readout, and leaving it constant gives
+  // the eye something to measure the tail's drained grey against. It falls from
+  // behind the ears down the crest and onto the back, stepping back a pixel a
+  // strand, which is what makes it hang rather than stripe. There is no
+  // forelock: a fringe over the brow is a horse's, and it buried the ears.
+  MANE.forEach(([ox, oy, width, height], strand) => {
+    ctx.fillStyle = RAINBOW[strand];
+    head(ox + swing, oy, width, height);
+  });
+
+  // Horn last, so it crosses in front of the fleece. Its ink is re-laid here
+  // rather than in the silhouette pass because the fleece is drawn over the top
+  // of it; two rectangles is cheaper than reordering the whole head. Two
+  // stacked segments, the upper stepped forward, give it a taper and a forward
+  // rake without any diagonal drawing, and it out-tops the ears by a pixel so
+  // it stays the first thing read.
+  ctx.fillStyle = INK;
+  head(7, -25, 4, 6);
+  head(8, -28, 3, 5);
+  ctx.fillStyle = '#fea';
+  head(8, -24, 2, 7);
+  head(9, -27, 1, 4);
+  // One dark band is all a spiral needs at this size.
+  ctx.fillStyle = '#ea5';
+  head(8, -22, 2, 1);
+
+  if (!away) {
+    ctx.fillStyle = INK;
+    head(8, -16, 2, 2);
+    ctx.fillStyle = HOT;
+    head(8, -16, 1, 1);
+  }
+
   // Drawn past the invulnerability flicker: the frames just after a hit are
   // exactly when the player needs to be able to count what is left.
   ctx.globalAlpha = 1;
-  drawPips(x, y - 32, player.health, PLAYER_MAX_HEALTH, '#5ff2dd');
+  drawPips(x, y - 37, player.health, PLAYER_MAX_HEALTH, '#5ff2dd');
 }
 
 /**
  * One continuous beam, not a row of beads: an additive halo underneath so it
  * reads as light rather than as a painted stripe, then the solid beam with the
  * spectrum scrolling away down its length, then a white core hot enough to
- * blow out. The muzzle flare at the horn sells the unicorn as the source.
+ * blow out. The muzzle flare at the horn sells the llamacorn as the source.
  */
 function drawLaser(playerX, playerY) {
   if (!laser.active) return;
@@ -1076,12 +1235,10 @@ function drawLaser(playerX, playerY) {
     playerX, playerY, ...direction, 11, LASER_REACH,
     [[9, INK], [7, RAINBOW], [3, HOT]], gameTime * 26,
   );
-  // Far enough out along the beam to sit at the horn rather than the chest: a
-  // flare centred on the body simply erases the unicorn behind it.
-  const muzzleX = pixelX(playerX + laser.directionX * 16);
-  const muzzleY = pixelY(playerY + laser.directionY * 16);
+  const muzzleX = pixelX(playerX + (laser.directionX < 0 ? -10 : 10));
+  const muzzleY = pixelY(playerY - 23);
   ctx.fillStyle = HOT;
-  ctx.fillRect(muzzleX - 3, muzzleY - 3, 7, 7);
+  ctx.fillRect(muzzleX - 2, muzzleY - 2, 5, 5);
 }
 
 /**
@@ -1116,7 +1273,7 @@ function drawAimMarker(aimX, aimY) {
   const y = pixelY(aimY);
   // Closing in while firing, and warming once there is charge to spend, makes
   // the marker report the laser's state without adding anything to the HUD.
-  // Its colour is the unicorn's own magic rather than a neutral white, because
+  // Its colour is the llamacorn's own magic rather than a neutral white, because
   // a pale marker vanishes into the pale stone that covers most of the ruins —
   // leaving only its dark backing behind, which reads as grit on the screen.
   const reach = laser.active ? 5 : 8;
@@ -1206,6 +1363,11 @@ function draw() {
   const alpha = accumulator / FIXED_STEP;
   const cameraX = camera.previousX + (camera.x - camera.previousX) * alpha;
   const cameraY = camera.previousY + (camera.y - camera.previousY) * alpha;
+  // Render-only shake keeps collision and camera follow stable. Clamping the
+  // shaken sample prevents impacts near a map edge exposing the canvas void.
+  const limits = cameraLimits();
+  const viewX = clamp(cameraX + Math.sin(gameTime * 137) * shake / zoom, limits.minX, limits.maxX);
+  const viewY = clamp(cameraY + Math.sin(gameTime * 191) * shake / zoom, limits.minY, limits.maxY);
   const playerX = player.previousX + (player.x - player.previousX) * alpha;
   const playerY = player.previousY + (player.y - player.previousY) * alpha;
   const aimX = aim.previousX + (aim.x - aim.previousX) * alpha;
@@ -1214,14 +1376,14 @@ function draw() {
   ctx.fillStyle = '#0b161b';
   ctx.fillRect(0, 0, screenWidth, screenHeight);
   renderScale = dpr * zoom;
-  renderOffsetX = Math.round((screenWidth / 2 - cameraX * zoom) * dpr);
-  renderOffsetY = Math.round((screenHeight / 2 - cameraY * zoom) * dpr);
+  renderOffsetX = Math.round((screenWidth / 2 - viewX * zoom) * dpr);
+  renderOffsetY = Math.round((screenHeight / 2 - viewY * zoom) * dpr);
   ctx.setTransform(
     renderScale, 0, 0, renderScale,
     renderOffsetX, renderOffsetY,
   );
 
-  const bounds = visibleBounds(cameraX, cameraY);
+  const bounds = visibleBounds(viewX, viewY);
   drawTerrain(ctx, terrain, bounds);
   for (const enemy of enemies) {
     drawEnemyTelegraph(

@@ -15,16 +15,17 @@ registerHooks({
       shortCircuit: true,
       source: `export default ${readFileSync(new URL(url), 'utf8')}`,
     };
-    // `dead=id` starts one Construct's real removal timer, making every phase
-    // of a death effect inspectable without a debug branch in the shipped game.
-    if (url.endsWith('/game.js') && options.dead !== undefined) return {
-      format: 'module',
-      shortCircuit: true,
-      source: readFileSync(new URL(url), 'utf8').replace(
+    // `dead=id` and `shake=n` expose transient rendering states without a
+    // debug branch in the shipped game.
+    if (url.endsWith('/game.js') && (options.dead !== undefined || options.shake)) {
+      let source = readFileSync(new URL(url), 'utf8');
+      if (options.dead !== undefined) source = source.replace(
         'let enemies = makeEnemies();',
         `let enemies = makeEnemies(); enemies[${Number(options.dead)}].health = 0; enemies[${Number(options.dead)}].death = CONSTRUCT_DEATH;`,
-      ),
-    };
+      );
+      if (options.shake) source = source.replace('let shake = 0;', `let shake = ${Number(options.shake)};`);
+      return { format: 'module', shortCircuit: true, source };
+    }
     return nextLoad(url, context);
   },
 });
