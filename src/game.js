@@ -37,19 +37,27 @@ const DEBUG_START_CHARGE = LASER_MAX_CHARGE;
 // coming down lands somewhere honest; creeping up from nothing always stops at
 // the first value that is merely acceptable. Every one of these is expected to
 // halve, roughly, once we have watched it.
-const SHAKE_HIT = 12;
-const SHAKE_KILL = 32;
-const SHAKE_HURT = 30;
-const SHAKE_LASER = 24;
+const SHAKE_HIT = 8;
+const SHAKE_KILL = 16;
+const SHAKE_HURT = 14;
+const SHAKE_LASER = 13;
 // The rumble the beam settles into once the ignition has rung out. It has to
 // stay well under SHAKE_HIT: the laser shakes the frame every time it lands a
 // hit, and a floor anywhere near that amplitude would be the one thing capable
 // of hiding the laser's own hits.
-const SHAKE_LASER_HOLD = 6;
-// Shake bleeds off at a fixed rate rather than a fixed duration, so raising an
-// amplitude lengthens the shake as well as widening it. At these numbers a kill
-// rings for most of a second, which is its own dial.
-const SHAKE_DECAY = 34;
+const SHAKE_LASER_HOLD = 3;
+// Shake bleeds off at a fixed rate rather than a fixed duration, so an
+// amplitude is a duration too: halving a number shortens its shake as well as
+// narrowing it. Decay came down alongside the amplitudes to hold the ring times
+// roughly where they were — a kill that is half as wide and half as long stops
+// registering as a kill at all.
+const SHAKE_DECAY = 26;
+// Impacts are damped while the beam is up. The laser already owns the frame
+// with its vignette, its zoom and its own rumble, and a full-strength kill
+// spike on top of all that was the one combination that read as noise rather
+// than as feedback. At this scale a kill under the beam lands about as hard as
+// a melee hit does in silence, which is enough to be felt through the rumble.
+const SHAKE_LASER_DAMP = 0.55;
 // The laser's ignition flare: how long it runs, how far the view punches in,
 // and how much fatter the beam is while it lasts.
 const PUNCH_TIME = 0.22;
@@ -423,7 +431,7 @@ function hurtEnemy(enemy, knockX, knockY) {
   enemy.hitEffect = 0.16;
   enemy.knockX = knockX;
   enemy.knockY = knockY;
-  shake = Math.max(shake, enemy.health ? SHAKE_HIT : SHAKE_KILL);
+  shake = Math.max(shake, (enemy.health ? SHAKE_HIT : SHAKE_KILL) * (laser.active ? SHAKE_LASER_DAMP : 1));
   if (!enemy.health) {
     enemy.death = CONSTRUCT_DEATH;
     enemy.windup = enemy.attackEffect = 0;
