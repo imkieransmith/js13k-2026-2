@@ -361,10 +361,17 @@ export function moveOnTerrain(level, body, dx, dy, radius) {
 // One deliberately narrow ramp: a near-black teal void, olive-leaning greens
 // and warm cream stone. Keeping every material on the same warm/cool axis is
 // what makes the scene read as a single lit place rather than coloured shapes.
+//
+// Dirt is the one entry pulled a long way, from wet brown to a dry ochre. It is
+// what carries the southern-American read: a saturated gold shelf is the single
+// loudest signal the setting has, and it costs nothing but a different number.
+// Grass follows it only a little, yellow-shifted enough to look sun-struck
+// rather than watered. Void, water and the stone ramp are untouched on purpose
+// — they are what keeps the scene reading as Hyper Light Drifter first.
 export const RGB = [
   [11, 22, 27],
-  [82, 137, 62],
-  [124, 88, 58],
+  [96, 138, 55],
+  [196, 147, 52],
   [46, 146, 183],
   [203, 200, 176],
 ];
@@ -423,13 +430,16 @@ function shadeRect(image, x, y, width, height) {
   }
 }
 
-// Boundary treatments: sunlit shallows, and the shaded lip where ground cover
-// laps over a slab.
+// Boundary treatments: sunlit shallows, and the shaded lip where loose ground
+// laps over a slab. Dry earth drifts over cut stone exactly as turf does, so
+// it gets the same contact line in its own hue; without it the rule looked
+// arbitrary, applied at one material boundary in the level and no other.
 const WATER_RIM = [126, 205, 214];
-const GRASS_CONTACT = [46, 88, 46];
+const GRASS_CONTACT = [52, 84, 40];
+const DIRT_CONTACT = [128, 90, 32];
 
 // Amplitude per material: ground cover weathers hard, cut stone barely at all.
-const TONE_RANGE = [0, 15, 10, 12, 8];
+const TONE_RANGE = [0, 15, 12, 12, 8];
 
 /**
  * Value noise at three scales, each sampled through a jittered coordinate so
@@ -443,16 +453,21 @@ const TONE_RANGE = [0, 15, 10, 12, 8];
  * be proportionally larger or its region borders show up as straight seams.
  */
 function octave(x, y, shift, seed) {
-  // Displacement is sampled at an eighth of the cell and swings up to half of
+  // Displacement is sampled at a sixteenth of the cell and swings up to half of
   // it, so every octave's grid dissolves at its own scale. A fixed jitter only
   // ever hides the finest one and leaves the wider ones showing as squares.
-  // The displacement has to stay well under the cell, or neighbouring drift
-  // blocks land in unrelated cells and the region breaks into squares at the
-  // drift scale instead of gaining a ragged border. An eighth-cell block
-  // displaced by up to a quarter cell is the balance that reads as organic.
+  //
+  // The block the drift is sampled in is what the torn border is actually made
+  // of, so it has to stay small against the tile: at an eighth of the cell the
+  // widest octave tore in 32-unit steps - a whole tile per step - and at any
+  // real contrast the border read as a staircase of rectangles rather than as
+  // a ragged edge. Halving the block halves the step and the same border
+  // reads as erosion. The displacement stays where it was, well under the
+  // cell, or neighbouring blocks land in unrelated cells and the region breaks
+  // up at the drift scale instead of gaining a border at all.
   const cell = 1 << shift;
   const swing = cell >> 1;
-  const drift = terrainHash(x >> shift - 3, y >> shift - 3, seed);
+  const drift = terrainHash(x >> shift - 4, y >> shift - 4, seed);
   return terrainHash(
     x + drift % swing - (swing >> 1) >> shift,
     y + (drift >>> 9) % swing - (swing >> 1) >> shift,
@@ -471,7 +486,13 @@ function tone(x, y, code, seed) {
   // which is what reads as light falling across a landscape.
   const region = octave(x, y, 8, seed + 3) + octave(x + 128, y + 128, 8, seed + 37);
   const broad = octave(x, y, 6, seed + code);
-  return (region * 2 + broad) * TONE_RANGE[code] / 5;
+  // Weight sits on the wide pair rather than on a wider octave still. A grid
+  // lazier than these has drift blocks big enough to be seen as blocks -
+  // its displacement scales with its cell, so at sixteen tiles the jitter that
+  // dissolves the eight-tile grid is itself two tiles across and the field
+  // breaks into rectangles at the drift scale. Deepening a scale that already
+  // renders cleanly buys the same broad light and shade with none of that.
+  return (region * 3 + broad) * TONE_RANGE[code] / 5;
 }
 
 /** Cut stone weathers too, and a crown spanning many tiles is far too large a
@@ -537,26 +558,176 @@ function drawFloorDetails(image, level, slots, slot, tileX, tileY, lift) {
 }
 
 /**
- * Props are silhouette-first: a dark contact blob anchors the object, a body
- * only a shade above the void carries the shape, and one narrow rim of colour
- * on top catches the same light as the raised ground.
+ * Props are silhouette-first: ink lumps carry the shape and the fill sits a
+ * pixel inside them, so every prop keeps a hard dark rim.
+ *
+ * Their shadows are cast down and to the right, the same direction the walls
+ * throw theirs and the same direction the light shafts travel. Everything in
+ * the level that stands up off the ground is lit from one place and shadows to
+ * one place; the old contact shelf under each prop obeyed neither, because it
+ * was the silhouette's own base drawn twice rather than a shadow at all. Terrain materials
+ * deliberately do not get that rim - two ground materials meet on one plane
+ * and an outline between them would read as a trench - but anything standing
+ * up off the ground occludes what is behind it, and the rim is what says so.
+ *
+ * Every ink lump has to be laid before any fill. Interleaving them lets a
+ * later lump's outline print a dark line across an earlier lump's interior,
+ * which is the one arrangement of these rects that cannot be seen coming.
  */
 function drawDecoration(image, level, code, tileX, tileY, slot, lift) {
-  const x = tileX * AUTHOR_TILE;
-  const y = tileY * AUTHOR_TILE;
   const variant = terrainHash(tileX, tileY, level.seed + slot * 43);
+  // Folded into the origin rather than added at every call: a prop is thirty
+  // rectangles now and the jitter belongs to the whole object anyway.
+  const x = tileX * AUTHOR_TILE + variant % 5 - 2;
+  const y = tileY * AUTHOR_TILE;
+  const at = (left, top, width, height, colour) => fillRect(image, x + left, y + top, width, height, colour, lift);
+  // Which ground this prop is standing on decides two things: what it is, and
+  // what colour it is rimmed in.
+  const dry = stackAt(level, tileX, tileY).includes('d');
+  // Props are rimmed and shadowed in a deep shade of the ground they stand on,
+  // not in ink. Ink is right for the units - they move across every material
+  // in the level and have to stay legible over all of them - but a prop only
+  // ever sits on one, and a near-black ring is an enormous value step against
+  // gold. Every cactus on the dry shelf read as a sticker. The rim only has to
+  // be dark enough to say the object is in front of the ground behind it, and
+  // borrowing the ground's own hue is what makes it look planted in the place
+  // rather than pasted onto it - the same reasoning the contact lines between
+  // materials already follow.
+  const rim = dry ? [104, 72, 26] : [31, 56, 32];
+  // Props cast the same shadow the structures do, in two bands stepping down
+  // and right. shadeRect multiplies what is already baked instead of painting
+  // a colour, which is why one call serves over grass, gold and cut slab alike
+  // and why it needs no per-material tint the way the rim does.
+  //
+  // Laid before the prop, never after. Half of a cast shadow falls underneath
+  // its own object, and the body has to be the thing that covers that half -
+  // drawn over the top instead, the bands darken the prop's own shaded flank
+  // and it reads as a smudge on the object rather than a shadow beside it.
+  // Four short bands, not two long ones. Reach and smoothness pull against
+  // each other here: two five-pixel steps read as a pair of blocks dropped
+  // beside the object, and widening the steps to reach further only made the
+  // blocks bigger. Adding a band instead buys the same reach out of steps
+  // small enough to read as a taper, and the taper is what makes it a shadow
+  // rather than a shape.
+  //
+  // The width is the caller's, because a shadow shared between a wide shrub, a
+  // round cactus and a squat boulder belongs to none of them. It has to start
+  // as wide as the thing standing in the light, and it has to run far enough
+  // that the crescent clearing the far side is a shadow's length rather than a
+  // sliver - most of these bands are hidden under their own object, so a
+  // shadow sized to look right on its own looks far too small once drawn.
+  const cast = (left, top, width) => {
+    for (let band = 0; band < 4; band++) {
+      shadeRect(image, x + left + band * 5, y + top + band * 3, width - band * 3, band ? 4 : 5);
+    }
+  };
   if (code === 5) {
-    const offset = variant % 5 - 2;
-    const wide = variant >> 4 & 3;
-    fillRect(image, x + 4 + offset, y + 22, 24 + wide, 4, [17, 33, 30], lift);
-    fillRect(image, x + 5 + offset, y + 16, 22 + wide, 8, [23, 48, 40], lift);
-    fillRect(image, x + 8 + offset, y + 11, 15 + wide, 10, [30, 62, 46], lift);
-    fillRect(image, x + 10 + offset, y + 10, 10 + wide, 3, [58, 104, 60], lift);
+    // Ground cover on dry earth is a barrel cactus rather than a shrub. It is
+    // the cheapest possible way to say which continent this is: the material
+    // already decides where scrub grows, so the plant can simply read the
+    // ground it is standing on and no level data, editor material or palette
+    // entry has to be added for it.
+    if (dry) {
+      const flesh = [116, 154, 78];
+      // The barrel turns away to the south-east. Without it the plant was a
+      // flat green disc with a rim drawn round it, which read as a badge next
+      // to a rock and a shrub that both carry a lit plane and a shaded one.
+      const turn = [80, 112, 56];
+      // Three stacked lumps rather than a circle: a barrel is wide in the
+      // middle and the steps are the plant's own shoulders at this size.
+      cast(6, 20, 21);
+      at(10, 5, 12, 23, rim);
+      at(7, 8, 18, 18, rim);
+      at(5, 11, 22, 12, rim);
+      at(11, 6, 10, 21, flesh);
+      at(8, 9, 16, 16, flesh);
+      at(6, 12, 20, 10, flesh);
+      // The far flank and the underside fall away, following the same light
+      // the rock's facets and the shrub's crown are lit by. They have to meet:
+      // a flank down one side and a separate block across the base read as two
+      // rectangles rather than as one surface turning.
+      at(19, 9, 5, 15, turn);
+      at(13, 23, 8, 3, turn);
+      // The crown is lit on the near side only now that the far side turns.
+      at(11, 6, 8, 3, [156, 188, 100]);
+      // A tan bloom on the crown. One warm accent per plant is what stops a
+      // field of these reading as green lumps.
+      at(14, 6, 4, 1, [214, 176, 138]);
+      // Speckled ribs, jittered a row per plant so no two are the same.
+      for (let dot = 0; dot < 12; dot++) {
+        at(
+          10 + dot % 3 * 6, 9 + (dot / 3 | 0) * 4 + (variant >> dot & 1), 1, 1,
+          // The far column of ribs sits in the shaded flank. Full-brightness
+          // specks there punch straight back through the shading and flatten
+          // the barrel again, which is the whole thing this was added to fix.
+          dot % 3 === 2 ? [178, 194, 146] : [236, 240, 214],
+        );
+      }
+      return;
+    }
+    const bark = rim;
+    const leaf = [44, 84, 50];
+    // A round mass with bites taken out of its crown, not a stack of bands and
+    // not a row of towers - both of those were tried and both read as
+    // architecture. The silhouette does the work here: a dome says shrub, and
+    // two notches in it are all that is needed to stop the dome reading as one
+    // smooth object.
+    //
+    // The fill sits further above the ink than the old bush did. Silhouette
+    // props were drawn barely a shade above the void on purpose, but at that
+    // separation there is nowhere to put interior detail, and beside a cactus
+    // with speckled ribs the shrub looked unfinished rather than restrained.
+    cast(5, 17, 23);
+    at(8, 6, 16, 19, bark);
+    at(5, 9, 22, 15, bark);
+    at(3, 12, 26, 10, bark);
+    at(9, 7, 14, 17, leaf);
+    at(6, 10, 20, 13, leaf);
+    at(4, 13, 24, 8, leaf);
+    // Lit on the north-west, where the walls take their own highlight and
+    // where the shafts fall from.
+    at(9, 7, 9, 3, [86, 132, 66]);
+    at(6, 10, 6, 2, [86, 132, 66]);
+    // One wide bite out of the crown, wandering four pixels off the hash. Two
+    // narrow bites left three teeth of roughly equal width between them, which
+    // is battlements again - the notch has to be wider than what it leaves.
+    at(13 + (variant >> 7 & 3), 6, 4, 3, bark);
+    // Foliage, alternating lit and shaded. Dark marks alone read as damage;
+    // it is the light ones that say leaves, and they are the shrub's answer to
+    // the speckled ribs on the cactus.
+    for (let sprig = 0; sprig < 6; sprig++) {
+      at(
+        7 + sprig * 3 + (variant >> sprig + 3 & 1),
+        11 + (variant >> sprig & 3) * 3, 2, 1,
+        sprig & 1 ? bark : [86, 132, 66],
+      );
+    }
   } else if (code === 6) {
-    const offset = variant % 7 - 3;
-    fillRect(image, x + 9 + offset, y + 21, 16, 3, [24, 40, 40], lift);
-    fillRect(image, x + 10 + offset, y + 15, 14, 7, [118, 124, 111], lift);
-    fillRect(image, x + 12 + offset, y + 12, 9, 4, [196, 197, 172], lift);
+    const grit = rim;
+    const face = [96, 106, 100];
+    const shade = [58, 72, 72];
+    // Three lumps widening as they fall and pushed off-centre, not stacked
+    // square. A boulder is faceted and bottom-heavy; a symmetrical stack of
+    // rects is a plinth, which is exactly what this was - a bright slab
+    // balanced on a grey box. Widest in the middle was the first attempt and
+    // gave it feet, so the base carries the width and the taper runs upward.
+    cast(5, 14, 21);
+    at(8, 8, 12, 6, grit);
+    at(6, 11, 19, 8, grit);
+    at(4, 15, 22, 8, grit);
+    at(9, 9, 10, 4, face);
+    at(7, 12, 17, 6, face);
+    at(5, 16, 20, 6, face);
+    // One lit plane running north-west across the top, the same direction
+    // every wall in the level takes its own highlight from.
+    at(9, 9, 10, 4, [176, 180, 160]);
+    at(7, 12, 8, 3, [176, 180, 160]);
+    // The south-east faces fall away. Without them the body is one flat grey
+    // and the rock reads as a decal lying on the ground rather than a solid
+    // standing on it.
+    at(15, 14, 9, 4, shade);
+    at(13, 18, 11, 4, shade);
+    at(8 + (variant >> 3 & 3), 15, 5, 1, shade);
   }
 }
 
@@ -578,7 +749,7 @@ function drawScatter(image, level, slots, support, lift) {
     }
     // Tiles carrying a prop are left alone; scatter runs after the slot loop
     // and would otherwise stipple tufts across the bush it grows beside.
-    if (prop || (code !== 1 && code !== 3 && code !== 4)) continue;
+    if (prop || !code || code > 4) continue;
     const count = terrainHash(tileX, tileY, level.seed + 311) % 4;
     for (let i = 0; i < count; i++) {
       const spot = terrainHash(tileX * 7 + i, tileY * 13 + i * 3, level.seed + 57);
@@ -586,8 +757,13 @@ function drawScatter(image, level, slots, support, lift) {
       const y = tileY * AUTHOR_TILE + (spot >> 5) % 27 + 2;
       if (code === 1) {
         // Grass tufts: a dark blade cluster with one lit tip above it.
-        fillRect(image, x, y + 1, 3, 2, [40, 79, 43], lift);
-        fillRect(image, x + 1, y, 1, 2, [117, 172, 82], lift);
+        fillRect(image, x, y + 1, 3, 2, [45, 76, 38], lift);
+        fillRect(image, x + 1, y, 1, 2, [128, 170, 74], lift);
+      } else if (code === 2) {
+        // Dry earth cracks and sheds grit rather than sprouting: a short dark
+        // fissure with one grain catching the light on its upper edge.
+        fillRect(image, x, y + 1, 2 + spot % 3, 1, [138, 96, 36], lift);
+        if (spot & 2048) fillRect(image, x + 1, y, 1, 1, [230, 194, 116], lift);
       } else if (code === 3) {
         // Water gets flat horizontal glints. Reflections lie along the surface,
         // so a streak reads as water where a speck would read as debris.
@@ -627,7 +803,7 @@ function drawMaterialEdges(image, field, lift) {
   for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) {
     const index = y * width + x;
     const code = field[index];
-    if (code !== 1 && code !== 3) continue;
+    if (!code || code === 4) continue;
     const north = y ? field[index - width] : 0;
     const south = y < height - 1 ? field[index + width] : 0;
     const west = x ? field[index - 1] : 0;
@@ -636,7 +812,7 @@ function drawMaterialEdges(image, field, lift) {
       // Shallows catch the light all the way around the pool.
       if (north !== 3 || south !== 3 || west !== 3 || east !== 3) setPixel(image, x, y, WATER_RIM, lift);
     } else if (north === 4 || south === 4 || west === 4 || east === 4) {
-      setPixel(image, x, y, GRASS_CONTACT, lift);
+      setPixel(image, x, y, code === 1 ? GRASS_CONTACT : DIRT_CONTACT, lift);
     }
   }
 }
@@ -683,6 +859,13 @@ function drawBand(image, level, slots, support, upper = false, field = null) {
   drawScatter(image, level, slots, support, lift);
 }
 
+/**
+ * Every structure throws its shadow six pixels south and six east, which is
+ * the direction the light shafts travel and the direction every lit bevel and
+ * prop highlight in the level faces away from. The two depths differ on
+ * purpose: a wall's southern shadow falls from a two-tile facade and its
+ * eastern one from the crown alone.
+ */
 function drawShadows(image, level, walls, stairs) {
   const at = (field, x, y) => {
     const index = tileIndex(level, x, y);
@@ -698,7 +881,7 @@ function drawShadows(image, level, walls, stairs) {
       const facade = !at(walls, x, y + 1) && !at(stairs, x, y + 1);
       if (facade) shadeRect(image, worldX + 6, worldY + 64, AUTHOR_TILE, 12);
       if (!at(walls, x + 1, y) && !at(stairs, x + 1, y)) shadeRect(image, worldX + 32, worldY + 6, 6, facade ? 64 : 32);
-    } else if (!at(stairs, x, y + 2)) shadeRect(image, worldX + 5, worldY + 64, AUTHOR_TILE, 6);
+    } else if (!at(stairs, x, y + 2)) shadeRect(image, worldX + 6, worldY + 64, AUTHOR_TILE, 6);
   }
 }
 

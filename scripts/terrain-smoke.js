@@ -187,18 +187,26 @@ const pixelAt = (pixels, x, y) => [...pixels.slice((y * visual.width + x) * 4, (
 // Structural bevel samples are asserted against their named palette steps;
 // broad stone and ground materials carry tonal noise, so their interiors are
 // checked as a nearby shade rather than as one exact value.
+//
+// The default tolerance tracks the widest ground tone swing: TONE_RANGE peaks
+// at 15 for Grass, the octaves sum to +/-8 fifths of it, and the green channel
+// takes lift at 1.15. Anything inside that is the material weathering, which is
+// exactly what this assertion is meant to allow; anything outside it is the
+// wrong material. Tighten it per call where a flat structural fill is expected.
 const shade = (colour, lift) => colour.map((value, index) => value + lift * [1, 1.15, 0.7][index]);
-const near = (actual, expected, message, tolerance = 12) => assert.ok(
+const near = (actual, expected, message, tolerance = 28) => assert.ok(
   actual.every((value, index) => Math.abs(value - expected[index]) <= tolerance),
   `${message} (got ${actual}, expected within ${tolerance} of ${expected.map(Math.round)})`,
 );
 const luma = colour => colour[0] * 0.3 + colour[1] * 0.6 + colour[2] * 0.1;
 
-near(pixelAt(firstPixels, 5 * 32 + 16, 16), STONE.crown, 'Joined Wall row did not render as a lit crown', 8);
+// Stone fills borrow the shallowest tone band (Floor, amplitude 8), so their
+// tolerance is that band's own swing rather than the wider ground default.
+near(pixelAt(firstPixels, 5 * 32 + 16, 16), STONE.crown, 'Joined Wall row did not render as a lit crown', 16);
 assert.deepEqual(pixelAt(firstPixels, 5 * 32 + 8, 1), STONE.lip, 'Wall mass is missing its back perimeter highlight');
 assert.deepEqual(pixelAt(firstPixels, 5 * 32 + 13, 1), STONE.crown, 'Wall perimeter is missing its deterministic worn nick');
 assert.deepEqual(pixelAt(firstPixels, 5 * 32 + 8, 0), STONE.side, 'Wall perimeter is missing its outer bevel tone');
-near(pixelAt(firstPixels, 5 * 32 + 16, 33), STONE.crown, 'Middle Wall row emitted a repeated lip', 8);
+near(pixelAt(firstPixels, 5 * 32 + 16, 33), STONE.crown, 'Middle Wall row emitted a repeated lip', 16);
 assert.deepEqual(pixelAt(firstPixels, 5 * 32 + 16, 2 * 32 + 29), STONE.side, 'Exposed Wall crown is missing its bevel approach');
 assert.deepEqual(pixelAt(firstPixels, 5 * 32 + 16, 2 * 32 + 30), STONE.lip, 'Exposed Wall crown is missing its highlight');
 assert.deepEqual(pixelAt(firstPixels, 5 * 32 + 16, 2 * 32 + 31), STONE.face, 'Exposed Wall crown is missing its shaded bevel edge');
@@ -213,7 +221,7 @@ assert.deepEqual(pixelAt(firstPixels, 1 * 32 + 16, 2 * 32 + 30), STONE.lip, 'Ele
 assert.deepEqual(pixelAt(firstPixels, 1 * 32 + 16, 2 * 32 + 31), STONE.face, 'Elevated south edge is missing its shaded bevel edge');
 assert.deepEqual(pixelAt(firstPixels, 1 * 32 + 16, 3 * 32), STONE.mass, 'Elevated south edge is missing its structural return');
 assert.deepEqual(pixelAt(firstPixels, 1 * 32 + 16, 3 * 32 + 2), STONE.base, 'Elevated south edge is missing its baseline');
-near(pixelAt(firstPixels, 1 * 32 + 16, 3 * 32 + 16), STONE.face, 'Elevated Grass covered the lower Wall face', 8);
+near(pixelAt(firstPixels, 1 * 32 + 16, 3 * 32 + 16), STONE.face, 'Elevated Grass covered the lower Wall face', 16);
 near(pixelAt(firstPixels, 2 * 32 + 16, 2 * 32 + 16), shade(RGB[4], RAISED_LIFT), 'Elevated Floor did not receive the height grade');
 near(pixelAt(firstPixels, 2 * 32 + 16, 1 * 32 + 16), shade(RGB[3], RAISED_LIFT), 'Elevated Water did not receive the height grade');
 // Props are flat fills, so the grade is checked as an exact relationship
@@ -229,7 +237,7 @@ assert.deepEqual(pixelAt(firstPixels, 3 * 32 + 16, 2 * 32), STONE.lip, 'Stairs a
 assert.deepEqual(pixelAt(firstPixels, 3 * 32 + 16, 2 * 32 + 6), STONE.riser, 'Stairs are missing their riser');
 assert.deepEqual(pixelAt(firstPixels, 4 * 32, 2 * 32 + 4), STONE.tread, 'Joined Stairs emitted an internal rail');
 assert.deepEqual(pixelAt(firstPixels, 4 * 32 + 30, 2 * 32 + 20), STONE.tread, 'Stairs duplicated a rail beside Wall');
-near(pixelAt(firstPixels, 16, 3 * 32 + 16), STONE.crown, 'Wall behind Stairs emitted a pushed-back facade', 8);
+near(pixelAt(firstPixels, 16, 3 * 32 + 16), STONE.crown, 'Wall behind Stairs emitted a pushed-back facade', 16);
 assert.deepEqual(pixelAt(firstPixels, 1, 4 * 32 + 16), STONE.lip, 'Stairs are missing their outer rail');
 assert.deepEqual(pixelAt(firstPixels, 1 * 32 + 30, 4 * 32 + 16), STONE.mass, 'Stairs are missing their opposite outer rail');
 assert.deepEqual(pixelAt(firstPixels, 3 * 32 + 16, 3 * 32 + 30), STONE.riser, 'Vertically touching Stairs emitted an internal baseline');
@@ -237,8 +245,8 @@ assert.deepEqual(pixelAt(firstPixels, 4 * 32 + 16, 3 * 32 + 30), STONE.base, 'Ex
 // Shadows multiply whatever was baked underneath, so they are asserted as a
 // darkening of the lit Floor rather than as a colour of their own.
 const litFloor = pixelAt(firstPixels, 7 * 32 - 1, 2 * 32 + 16);
-near(litFloor, RGB[4], 'Wall cast a shadow against the light direction', 8);
-near(pixelAt(firstPixels, 7 * 32 + 16, 3 * 32 + 13), RGB[4], 'Wall shadow exceeded its agreed depth', 8);
+near(litFloor, RGB[4], 'Wall cast a shadow against the light direction', 16);
+near(pixelAt(firstPixels, 7 * 32 + 16, 3 * 32 + 13), RGB[4], 'Wall shadow exceeded its agreed depth', 16);
 for (const [x, y, message] of [
   [7 * 32 + 16, 3 * 32 + 4, 'Wall run is missing its continuous southern shadow'],
   [8 * 32 + 6, 3 * 32 + 4, 'Joined Wall shadow has a tile seam'],

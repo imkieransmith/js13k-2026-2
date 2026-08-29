@@ -705,16 +705,24 @@ function visibleBounds(cameraX, cameraY) {
   };
 }
 
-// Three tapering translucent rows. Each overlaps the last, so the shadow comes
-// out dense under the body and thin at its rim without a gradient — a flat
-// rectangle under a character reads as a hole cut in the floor, and it stays
-// translucent so the same shadow works over grass, stone and water alike.
+// Three translucent bands, each stepping down and to the right of the last.
+// The light runs top-left to bottom-right — the shafts skew that way and every
+// wall in the level throws its shadow that way — so an actor's shadow leans
+// with it rather than sitting as a symmetrical puddle.
+//
+// Stepped, not merely offset. Sliding a round blob down-right leaves the actor
+// looking like it is hovering over its own shadow; overlapping bands that walk
+// outward keep the darkest part where the feet actually meet the ground and
+// let the tail thin out as it stretches away, which is the shape a cast shadow
+// has. The overlap is also where the density comes from: no gradient needed,
+// and it stays translucent so one shadow works over grass, gold, stone and
+// water alike.
 function drawShadow(x, y, radius, alpha = 0.22) {
   ctx.globalAlpha = alpha;
   ctx.fillStyle = '#011';
-  ctx.fillRect(x - radius, y - 1, radius * 2, 3);
-  ctx.fillRect(x - radius + 2, y - 2, radius * 2 - 4, 5);
-  ctx.fillRect(x - radius + 5, y - 3, radius * 2 - 10, 7);
+  ctx.fillRect(x - radius, y - 3, radius * 2 - 6, 6);
+  ctx.fillRect(x - radius + 4, y - 1, radius * 2 - 6, 6);
+  ctx.fillRect(x - radius + 8, y + 1, radius * 2 - 6, 5);
   ctx.globalAlpha = 1;
 }
 
