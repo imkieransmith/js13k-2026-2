@@ -142,6 +142,7 @@ const player = {
   invulnerability: 0,
   hitEffect: 0,
   hurtGlow: 0,
+  tuck: 0,
 };
 
 const camera = { x: player.x, y: player.y, previousX: player.x, previousY: player.y };
@@ -252,6 +253,12 @@ function updatePlayer(dt) {
   player.hitEffect = Math.max(0, player.hitEffect - dt);
   player.dashCooldown = Math.max(0, player.dashCooldown - dt);
   dashBuffer = Math.max(0, dashBuffer - dt);
+  // Chased rather than switched, so the legs fold and unfold instead of
+  // snapping between two poses. It has to converge inside DASH_TIME to be worth
+  // drawing at all — at this rate the fold is most of the way there by the time
+  // the dash is half over — and because it is only ever chasing the flag, the
+  // unfold carries on after the dash has ended and reads as the landing.
+  player.tuck += ((player.dashTime ? 1 : 0) - player.tuck) * Math.min(1, dt * 22);
 
   if (dashBuffer && !player.dashCooldown) beginDash(input);
 
@@ -620,7 +627,7 @@ function resetEncounter() {
   player.health = PLAYER_MAX_HEALTH;
   player.invulnerability = 0.8;
   player.hitEffect = 0;
-  player.dashTime = player.dashCooldown = 0;
+  player.dashTime = player.dashCooldown = player.tuck = 0;
   attack.time = attack.cooldown = attack.hits = 0;
   laser.charge = DEBUG_START_CHARGE;
   laser.punch = player.hurtGlow = 0;
@@ -1193,7 +1200,15 @@ function drawPlayer(playerX, playerY) {
   const head = (ox, oy, width, height) =>
     spriteRect(x, bodyY, flip, ox + leanX, oy + leanY, width, height);
   // Feet stay on the ground while the barrel bobs above them.
-  const leg = (ox, oy, width, height) => spriteRect(x, y, flip, ox, oy, width, height);
+  // Dashing folds the legs up under the barrel. Every leg rectangle keeps its
+  // top and loses height off the bottom, so they retract into the body rather
+  // than shrink in place, and the pads come up with them. The animal's own
+  // height is left alone — the barrel lifts by the same two pixels it always
+  // did and the shadow stays where the ground is, so it reads as legs tucking
+  // rather than as a llamacorn getting smaller.
+  const tuck = Math.round(player.tuck * 5);
+  const leg = (ox, oy, width, height) =>
+    spriteRect(x, y, flip, ox, oy, width, height - tuck);
   // Facing the camera, the crest is seen end-on and its upper half is simply on
   // the far side of the neck. Narrowing the strands from the back — twice as
   // much at the poll, where the turn is sharpest — is what sells that; left at
@@ -1295,8 +1310,8 @@ function drawPlayer(playerX, playerY) {
   // Two padded toes rather than a hoof: llamas walk on pads, and the split is
   // the one place the species shows below the knee.
   ctx.fillStyle = '#669';
-  leg(-9, 12 - liftB, 4, 3);
-  leg(4, 12 - liftA, 4, 3);
+  leg(-9, 12 - tuck - liftB, 4, 3 + tuck);
+  leg(4, 12 - tuck - liftA, 4, 3 + tuck);
   if (!away) {
     ctx.fillStyle = '#eab';
     head(12, -15, 2, 2);
