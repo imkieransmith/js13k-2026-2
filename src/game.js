@@ -1258,47 +1258,36 @@ function drawPlayer(playerX, playerY) {
 /**
  * One continuous beam, not a row of beads: one pixel of ink, then the spectrum
  * scrolling away down its length, then a white core hot enough to blow out.
- * The additive halo it used to carry is gone. It ran straight down the ray, so
- * once the beam bent at the muzzle it glowed where there was no laser, and
- * drawn as an outer layer instead it thickened the edge to three pixels — which
- * is the one thing nothing in this world is allowed to do.
+ * The additive halo it used to carry is gone. Drawn as an outer layer it
+ * thickened the edge to three pixels, which is the one thing nothing else in
+ * this world does.
  *
- * The beam is two straight runs, not one. Its ray has to start at the
- * llamacorn's own position, because that is the ray the hit test measures
- * against and the one that puts the beam across the middle of a Construct
- * rather than over its head — every sprite in this game is drawn standing above
- * its world position, so a beam raised to head height would burn things it
- * visibly passed over. But the horn is two dozen units above that, and a laser
- * that leaves the chest while the horn flares is two unrelated effects. So a
- * short spout carries it from the horn down onto the ray, and it runs true from
- * the joint outwards: the laser bends once, at the muzzle, where a bend reads
- * as the horn throwing it rather than as a mistake.
+ * The beam is one straight line from the horn, because anything else is two
+ * beams. The hit test measures against a ray from the llamacorn's own position
+ * — every sprite here is drawn standing above its world position, so a ray at
+ * head height would burn Constructs the beam visibly cleared — but the horn is
+ * two dozen units above that, and carrying the beam down onto that ray put a
+ * corner in it. A corner is a join, and a join is what the eye reads as two
+ * separate beams. So the drawn line starts on the horn and is aimed at the
+ * point where the ray leaves the screen instead: it ends exactly where the
+ * shot ends, and the horn offset is spent as two or three degrees of angle
+ * that nobody can see rather than as a kink halfway down that everybody can.
  */
 function drawLaser(playerX, playerY) {
   if (!laser.active) return;
-  const phase = gameTime * 26;
   const hornX = playerX + (laser.directionX < 0 ? -10 : 10);
   const hornY = playerY - 22;
-  // The joint has to be far enough out that the spout leaves the horn nearly
-  // parallel to the ray. Meeting the ray close to the animal put a sixty-degree
-  // corner in it, and a corner that sharp is not a bend — it is two beams.
-  const joint = Math.min(90, laser.reach);
-  const spoutX = playerX + laser.directionX * joint - hornX;
-  const spoutY = playerY + laser.directionY * joint - hornY;
-  const spout = Math.hypot(spoutX, spoutY);
-
-  // One layer at a time across both runs, for exactly the reason drawBeam works
-  // one layer at a time along a single run: give each run its own full set of
-  // layers and the second run's ink backing buries the first run's colour where
-  // they meet, which draws a dark bar across the joint and splits the laser
-  // into two beams laid end to end. Layer by layer there is no seam to see.
-  for (const layer of [[9, INK], [7, RAINBOW], [3, HOT]]) {
-    drawBeam(hornX, hornY, spoutX / spout, spoutY / spout, 0, spout, [layer], phase);
-    drawBeam(
-      playerX, playerY, laser.directionX, laser.directionY,
-      joint - 2, laser.reach, [layer], phase,
-    );
-  }
+  // Floored so the endpoint stays far enough out to aim at. Standing against a
+  // screen edge leaves the ray only a few units to run, and a target that close
+  // sits behind the horn — which would fire the beam back at the llamacorn.
+  const run = Math.max(laser.reach, 64);
+  const endX = playerX + laser.directionX * run - hornX;
+  const endY = playerY + laser.directionY * run - hornY;
+  const length = Math.hypot(endX, endY);
+  drawBeam(
+    hornX, hornY, endX / length, endY / length, 0, length,
+    [[9, INK], [7, RAINBOW], [3, HOT]], gameTime * 26,
+  );
 }
 
 /**
