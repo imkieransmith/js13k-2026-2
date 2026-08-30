@@ -26,7 +26,7 @@ function saveLevel() {
         request.on('end', async () => {
           try {
             JSON.parse(body);
-            await writeFile(new URL('./src/levels/level1.json', import.meta.url), body);
+            await writeFile(new URL('./src/levels/arena.json', import.meta.url), body);
             response.statusCode = 204;
           } catch {
             response.statusCode = 400;

@@ -77,7 +77,7 @@ function atmosphere(pixels, width, height, worldX, worldY) {
 }
 
 const [, , outPath = 'dist/preview.png', cropArgs] = process.argv;
-const source = JSON.parse(readFileSync(new URL('../src/levels/level1.json', import.meta.url)));
+const source = JSON.parse(readFileSync(new URL('../src/levels/arena.json', import.meta.url)));
 const level = unpackLevel(source);
 const canvas = fakeCanvas();
 buildTerrain(level, 1, canvas);

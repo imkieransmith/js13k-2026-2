@@ -145,7 +145,7 @@ const pointForTile = (x, y, fine = false) => {
   const cell = fine ? 8 : 32;
   const worldX = x * cell + cell / 2;
   const worldY = y * cell + cell / 2;
-  return { clientX: 400 + (worldX - 1200) * 0.55, clientY: 300 + (worldY - 800) * 0.55 };
+  return { clientX: 400 + (worldX - 960) * 0.55, clientY: 300 + (worldY - 640) * 0.55 };
 };
 async function saveLevel() {
   await click(buttonFor(actions, 'action', 'save'));
@@ -154,9 +154,18 @@ async function saveLevel() {
 
 const server = await createServer({ configFile: false, server: { middlewareMode: true }, appType: 'custom', logLevel: 'silent' });
 try {
-  reloadBody = JSON.stringify((await import('../src/levels/level1.json', { with: { type: 'json' } })).default);
+  const arenaSource = (await import('../src/levels/arena.json', { with: { type: 'json' } })).default;
+  reloadBody = JSON.stringify(arenaSource);
   await server.ssrLoadModule('/src/editor.js');
   assert.equal(terrainPuts, 1, 'Editor did not perform one initial terrain build');
+  assert.equal((await saveLevel()).spawners.length, 4, 'Editor save discarded arena spawners');
+
+  // Run the gesture contract against the established grass test pad; the
+  // editor itself still boots and saves the active arena above.
+  reloadBody = JSON.stringify((await import('../src/levels/level1.json', { with: { type: 'json' } })).default);
+  await click(buttonFor(actions, 'action', 'load'));
+  await flushRaf();
+  terrainPuts = 1;
 
   // A tool change during a captured gesture must not change that gesture's material.
   await click(buttonFor(kinds, 'kind', 'dirt'));

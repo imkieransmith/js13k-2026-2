@@ -1,4 +1,4 @@
-import levelSource from './levels/level1.json';
+import levelSource from './levels/arena.json';
 import {
   AUTHOR_TILE,
   addStackEntry,
@@ -491,7 +491,7 @@ panel.addEventListener('click', async event => {
     try {
       const response = await fetch('/__save-level', { method: 'POST', body });
       if (!response.ok) throw Error();
-      setStatus('Saved src/levels/level1.json');
+      setStatus('Saved src/levels/arena.json');
     } catch {
       download(body);
       setStatus('Save endpoint unavailable — downloaded JSON');
@@ -504,7 +504,7 @@ panel.addEventListener('click', async event => {
 function download(body) {
   const link = document.createElement('a');
   link.href = URL.createObjectURL(new Blob([body], { type: 'application/json' }));
-  link.download = 'level1.json';
+  link.download = 'arena.json';
   link.click();
   URL.revokeObjectURL(link.href);
 }

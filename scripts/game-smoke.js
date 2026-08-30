@@ -10,6 +10,26 @@ import { registerHooks } from 'node:module';
 // test import the shipped module unmodified instead of a copy of it.
 registerHooks({
   load(url, context, nextLoad) {
+    if (url.endsWith('/game.js')) {
+      const source = readFileSync(new URL(url), 'utf8').replace(
+        'updateHud();\nrequestAnimationFrame(frame);',
+        `updateHud();
+        globalThis.__gameSmoke = {
+          reset: resetEncounter,
+          state: () => ({
+            health: player.health,
+            swing: attack.swing,
+            enemies: enemies.map(({ id, type, birth, health, arena }) => ({ id, type, birth, health, arena })),
+            projectiles: projectiles.length,
+            count: arena?.count || 0,
+            clock: arena?.clock || 0,
+            flash: arena ? [...arena.flash] : [],
+          }),
+        };
+        requestAnimationFrame(frame);`,
+      );
+      return { format: 'module', shortCircuit: true, source };
+    }
     if (!url.endsWith('.json')) return nextLoad(url, context);
     return {
       format: 'module',
@@ -93,7 +113,7 @@ const bakeMs = Date.now() - started;
 
 // Advance real frames, which exercises the fixed-step update loop, the camera,
 // enemy AI, the atmosphere pass and the terrain blit together.
-while (frameCount < 240) {
+while (frameCount < 480) {
   const next = scheduled;
   scheduled = null;
   assert.ok(next, 'Game stopped requesting frames');
@@ -107,6 +127,20 @@ for (const expected of ['drawImage', 'fillRect', 'setTransform', 'addColorStop']
   assert.ok(kinds.has(expected), `Render never issued ${expected}`);
 }
 assert.ok(calls.length > 10000, 'Render issued suspiciously little work');
+const arenaState = globalThis.__gameSmoke.state();
+assert.ok(arenaState.count >= 3, 'Active arena did not emit several enemies');
+assert.ok(arenaState.enemies.some(enemy => enemy.type === 1), 'Arena never emitted its ranged type');
+assert.equal(new Set(arenaState.enemies.map(enemy => enemy.id)).size, arenaState.enemies.length, 'Runtime enemy IDs collided');
+assert.ok(arenaState.enemies.every(enemy => enemy.arena), 'Arena emitted an authored/leashed enemy');
+globalThis.__gameSmoke.reset();
+const resetState = globalThis.__gameSmoke.state();
+assert.deepEqual(resetState.enemies, [], 'Reset retained arena enemies');
+assert.equal(resetState.projectiles, 0, 'Reset retained projectiles');
+assert.equal(resetState.count, 0, 'Reset retained arena escalation');
+assert.equal(resetState.swing, 0, 'Reset retained the melee swing serial');
+assert.equal(resetState.health, 5, 'Reset did not restore health');
+assert.ok(resetState.clock > 2, 'Reset did not restore the opening grace period');
+assert.ok(resetState.flash.every(value => value === 0), 'Reset retained a gate flash');
 // Grade and hurt wash are viewport resources. The rainbow wash is deliberately
 // dynamic, but an idle render must not rebuild either static gradient.
 assert.equal(gradientCount, 2, 'Render loop rebuilt a cached screen gradient');

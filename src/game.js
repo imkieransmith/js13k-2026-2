@@ -1,4 +1,5 @@
-import levelSource from './levels/level1.json';
+import levelSource from './levels/arena.json';
+import { createArena, markSwing, updateArena } from './arena.js';
 import { buildTerrain, drawTerrain, moveOnTerrain, terrainHash as hash, unpackLevel } from './terrain.js';
 
 (() => {
@@ -164,18 +165,21 @@ const aim = {
   previousY: player.y + AIM_DISTANCE,
 };
 const pointer = { x: 0, y: 0, seen: false };
-const attack = { time: 0, cooldown: 0, directionX: 0, directionY: 1, hits: 0 };
+const attack = { time: 0, cooldown: 0, directionX: 0, directionY: 1, swing: 0 };
 const laser = { charge: DEBUG_START_CHARGE, held: false, active: false, directionX: 0, directionY: 1, reach: 0, punch: 0 };
 const ENEMY_SPAWNS = level.enemies;
-const makeEnemies = () => ENEMY_SPAWNS.map(([x, y, type], id) => ({
-  id, type, x, y, previousX: x, previousY: y, homeX: x, homeY: y,
-  targetX: x, targetY: y, mode: 0, health: type ? 2 : 3,
+const makeEnemy = ([x, y, type], id, arena = false) => ({
+  id, type, arena, x, y, previousX: x, previousY: y, homeX: x, homeY: y,
+  targetX: x, targetY: y, mode: arena ? 1 : 0, health: type ? 2 : 3,
   think: id * 0.2, step: 0, cooldown: 0.4 + id * 0.13,
   windup: 0, attackEffect: 0,
   attackDirectionX: 0, attackDirectionY: 1,
-  hurt: 0, hitEffect: 0, death: 0, laserCooldown: 0, knockX: 0, knockY: 0,
-}));
+  hurt: 0, hitEffect: 0, death: 0, birth: arena ? 0.45 : 0,
+  laserCooldown: 0, knockX: 0, knockY: 0, swing: -1,
+});
+const makeEnemies = () => ENEMY_SPAWNS.map((spawn, id) => makeEnemy(spawn, id));
 let enemies = makeEnemies();
+let arena = createArena(level.spawners, enemies.length);
 let projectiles = [];
 const terrain = buildTerrain(level);
 const held = new Set();
@@ -333,7 +337,7 @@ function updateAttack(dt) {
   attack.directionY = player.facingY;
   attack.time = ATTACK_DURATION;
   attack.cooldown = ATTACK_COOLDOWN;
-  attack.hits = 0;
+  attack.swing++;
   attackBuffer = 0;
 }
 
@@ -391,14 +395,16 @@ function moveEnemy(enemy, targetX, targetY, speed, dt) {
   enemy.knockX *= damping;
   enemy.knockY *= damping;
 
-  // Clamp the intended destination to its authored home territory, then let
-  // the same terrain collision used by the player slide it around obstacles.
-  const homeX = enemy.x + moveX - enemy.homeX;
-  const homeY = enemy.y + moveY - enemy.homeY;
-  const homeDistance = Math.hypot(homeX, homeY);
-  if (homeDistance > ENEMY_ROAM) {
-    moveX = enemy.homeX + homeX / homeDistance * ENEMY_ROAM - enemy.x;
-    moveY = enemy.homeY + homeY / homeDistance * ENEMY_ROAM - enemy.y;
+  // Authored guardians retain a home territory. Gate-spawned arena enemies
+  // must cross the whole fighting floor instead of snapping back to a doorway.
+  if (!enemy.arena) {
+    const homeX = enemy.x + moveX - enemy.homeX;
+    const homeY = enemy.y + moveY - enemy.homeY;
+    const homeDistance = Math.hypot(homeX, homeY);
+    if (homeDistance > ENEMY_ROAM) {
+      moveX = enemy.homeX + homeX / homeDistance * ENEMY_ROAM - enemy.x;
+      moveY = enemy.homeY + homeY / homeDistance * ENEMY_ROAM - enemy.y;
+    }
   }
   moveOnTerrain(level, enemy, moveX, moveY, 12);
 }
@@ -463,8 +469,7 @@ function hurtEnemy(enemy, knockX, knockY) {
 function hitEnemies() {
   if (!attack.time) return;
   for (const enemy of enemies) {
-    const bit = 1 << enemy.id;
-    if (!enemy.health || attack.hits & bit) continue;
+    if (!enemy.health || enemy.birth) continue;
     const dx = enemy.x - player.x;
     const dy = enemy.y - player.y;
     const distance = Math.hypot(dx, dy);
@@ -473,7 +478,7 @@ function hitEnemies() {
     const dot = distance ? (dx * attack.directionX + dy * attack.directionY) / distance : 1;
     if (dot < Math.cos(ATTACK_ARC / 2 + bodyAllowance)) continue;
 
-    attack.hits |= bit;
+    if (!markSwing(attack, enemy)) continue;
     hurtEnemy(enemy, attack.directionX * 165, attack.directionY * 165);
     laser.charge = Math.min(LASER_MAX_CHARGE, laser.charge + LASER_HIT_CHARGE);
   }
@@ -501,7 +506,7 @@ function updateLaser(dt) {
   laser.reach = viewportReach(laser.directionX, laser.directionY, -8);
   laser.charge = Math.max(0, laser.charge - dt);
   for (const enemy of enemies) {
-    if (!enemy.health || enemy.laserCooldown) continue;
+    if (!enemy.health || enemy.birth || enemy.laserCooldown) continue;
     const dx = enemy.x - player.x;
     const dy = enemy.y - player.y;
     const along = dx * laser.directionX + dy * laser.directionY;
@@ -537,6 +542,10 @@ function updateEnemies(dt) {
       moveEnemy(enemy, enemy.x, enemy.y, 0, dt);
       continue;
     }
+    if (enemy.birth > 0) {
+      enemy.birth = Math.max(0, enemy.birth - dt);
+      continue;
+    }
     enemy.hurt = Math.max(0, enemy.hurt - dt);
     enemy.hitEffect = Math.max(0, enemy.hitEffect - dt);
     enemy.cooldown = Math.max(0, enemy.cooldown - dt);
@@ -546,15 +555,15 @@ function updateEnemies(dt) {
     const playerDistance = Math.hypot(playerX, playerY);
     const playerHomeDistance = Math.hypot(player.x - enemy.homeX, player.y - enemy.homeY);
 
-    if (enemy.mode === 0
+    if (!enemy.arena && enemy.mode === 0
       && playerHomeDistance <= ENEMY_LEASH
       && playerDistance < ENEMY_AGGRO) enemy.mode = 1;
     // Close pursuit only re-aggros inside the home leash. Beyond it, the
     // Construct must keep returning instead of sticking to its roam boundary.
-    if (enemy.mode === 2
+    if (!enemy.arena && enemy.mode === 2
       && playerHomeDistance <= ENEMY_LEASH
       && playerDistance < ENEMY_AGGRO) enemy.mode = 1;
-    if (enemy.mode === 1 && playerHomeDistance > ENEMY_LEASH) {
+    if (!enemy.arena && enemy.mode === 1 && playerHomeDistance > ENEMY_LEASH) {
       enemy.mode = 2;
       enemy.windup = enemy.attackEffect = 0;
     }
@@ -654,12 +663,13 @@ function resetEncounter() {
   player.hitEffect = 0;
   player.dashTime = player.dashCooldown = player.tuck = player.walk = player.step = 0;
   player.trailClock = 0;
-  attack.time = attack.cooldown = attack.hits = 0;
+  attack.time = attack.cooldown = attack.swing = 0;
   laser.charge = DEBUG_START_CHARGE;
   laser.punch = player.hurtGlow = 0;
   laser.held = laser.active = false;
   trails.length = 0;
   enemies = makeEnemies();
+  arena = createArena(level.spawners, enemies.length);
   projectiles = [];
   camera.x = camera.previousX = player.x;
   camera.y = camera.previousY = player.y;
@@ -668,6 +678,15 @@ function resetEncounter() {
   aim.previousX = aim.x;
   aim.previousY = aim.y;
   updateHud();
+}
+
+function updateArenaEncounter(dt) {
+  let living = 0;
+  for (const enemy of enemies) if (enemy.health) living++;
+  updateArena(
+    arena, dt, living, player, level.spawners,
+    ({ id, gate, type }) => enemies.push(makeEnemy([...level.spawners[gate], type], id, true)),
+  );
 }
 
 function update(dt) {
@@ -700,6 +719,7 @@ function update(dt) {
   updatePlayer(dt);
   updateCamera();
   updateAim();
+  updateArenaEncounter(dt);
   updateLaser(dt);
   updateEnemies(dt);
   updateProjectiles(dt);
@@ -733,6 +753,37 @@ function drawShadow(x, y, radius, alpha = 0.22) {
   ctx.fillRect(x - radius, y - 3, radius * 2 - 6, 6);
   ctx.fillRect(x - radius + 4, y - 1, radius * 2 - 6, 6);
   ctx.fillRect(x - radius + 8, y + 1, radius * 2 - 6, 5);
+  ctx.globalAlpha = 1;
+}
+
+/** A threshold of prismatic machinery embedded in each ruined gate. */
+function drawSpawner([x, y], index) {
+  const dx = level.player[0] - x;
+  const dy = level.player[1] - y;
+  const distance = Math.hypot(dx, dy) || 1;
+  const sideX = -dy / distance;
+  const sideY = dx / distance;
+  const flash = arena?.flash[index] || 0;
+  const grow = Math.round(flash * 4);
+  const width = 26 + flash * 18;
+  ctx.globalAlpha = 0.22 + flash * 0.7;
+  drawBeam(
+    x - sideX * width / 2, y - sideY * width / 2, sideX, sideY, 0, width,
+    [[7 + grow, DARK_RAINBOW], [5 + grow, RAINBOW], [1 + grow, HOT]],
+    gameTime * 5 + index * 2, 2,
+  );
+
+  // Loose pixels contract into the arriving body. They also make activation
+  // visible when the gate's threshold is partly hidden by its own ruin.
+  const radius = 11 + flash * 22;
+  ctx.globalAlpha = 0.18 + flash * 0.75;
+  for (let mote = 0; mote < 6; mote++) {
+    const angle = mote * Math.PI / 3 + gameTime * (index & 1 ? -2 : 2);
+    const moteX = pixelX(x + Math.cos(angle) * radius);
+    const moteY = pixelY(y + Math.sin(angle) * radius * 0.55);
+    ctx.fillStyle = RAINBOW[(mote + index) % RAINBOW.length];
+    ctx.fillRect(moteX - 1, moteY - 1, 3, 3);
+  }
   ctx.globalAlpha = 1;
 }
 
@@ -976,6 +1027,26 @@ function drawEnemyDeath(enemy, x, y) {
 function drawEnemy(enemy, x, y) {
   x = pixelX(x);
   y = pixelY(y);
+  if (enemy.birth) {
+    const progress = 1 - enemy.birth / 0.45;
+    const radius = (1 - progress) * 28;
+    ctx.globalAlpha = 0.3 + progress * 0.7;
+    for (let mote = 0; mote < 8; mote++) {
+      const angle = mote * Math.PI / 4 + enemy.id;
+      const moteX = x + Math.cos(angle) * radius;
+      const moteY = y + Math.sin(angle) * radius * 0.6;
+      const size = 2 + Math.round(progress * 3);
+      ctx.fillStyle = RAINBOW[(mote + enemy.id) % RAINBOW.length];
+      ctx.fillRect(moteX - (size >> 1), moteY - (size >> 1), size, size);
+    }
+    const core = Math.round(progress * 11);
+    if (core) {
+      ctx.fillStyle = HOT;
+      ctx.fillRect(x - (core >> 1), y - (core >> 1), core, core);
+    }
+    ctx.globalAlpha = 1;
+    return;
+  }
   const core = enemy.mode === 1 ? '#f4d' : '#84e';
   // The shadow drains with the death smoke instead of vanishing one frame
   // after it; living atmosphere remains visible while the body hurt-flashes.
@@ -1640,6 +1711,7 @@ function draw() {
 
   const bounds = visibleBounds(viewX, viewY);
   drawTerrain(ctx, terrain, bounds);
+  level.spawners.forEach(drawSpawner);
   for (const enemy of enemies) {
     drawEnemyTelegraph(
       enemy,
@@ -1649,8 +1721,8 @@ function draw() {
   }
   drawProjectiles(alpha);
 
-  // Six actors are cheap to sort and proper feet-based ordering prevents a
-  // lower character from disappearing behind one farther up the field.
+  // The director keeps this list bounded; proper feet-based ordering prevents
+  // a lower character from disappearing behind one farther up the field.
   const actors = enemies.map(enemy => ({
     enemy,
     x: enemy.previousX + (enemy.x - enemy.previousX) * alpha,

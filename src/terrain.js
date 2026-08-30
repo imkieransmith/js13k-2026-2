@@ -214,6 +214,13 @@ export function unpackLevel(source) {
   const collisionHeight = source.height / MASK_CELL;
   const collision = decodeRuns(source.collision, collisionWidth * collisionHeight, 'Collision');
   if (!Array.isArray(source.player) || source.player.length !== 2 || !Array.isArray(source.enemies)) throw Error('Invalid level starts');
+  const spawners = source.spawners === undefined ? [] : source.spawners;
+  if (!Array.isArray(spawners) || spawners.length && spawners.length !== 4
+    || spawners.some(point => !Array.isArray(point) || point.length !== 2
+      || !point.every(Number.isInteger)
+      || point[0] < 0 || point[1] < 0 || point[0] >= source.width || point[1] >= source.height)) {
+    throw Error('Invalid arena spawners');
+  }
   return {
     width: source.width,
     height: source.height,
@@ -221,6 +228,7 @@ export function unpackLevel(source) {
     seed: source.seed || 1,
     player: [...source.player],
     enemies: source.enemies.map(enemy => [...enemy]),
+    spawners: spawners.map(point => [...point]),
     tileWidth,
     tileHeight,
     collisionWidth,
@@ -257,6 +265,7 @@ export function packLevel(level) {
     seed: level.seed,
     player: level.player,
     enemies: level.enemies,
+    ...(level.spawners?.length ? { spawners: level.spawners } : {}),
     stacks: palette,
     tiles: bytesToBase64(bytes),
     ...(wide ? { wide: 1 } : {}),
