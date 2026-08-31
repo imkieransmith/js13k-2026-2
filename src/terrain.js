@@ -38,6 +38,7 @@ export function validateStack(input) {
 }
 
 function bandBounds(stack, target) {
+  if (target !== 'ground' && target !== 'upper') throw Error(`Unknown terrain band: ${target}`);
   const structure = structureIndex(stack);
   if (target === 'upper') {
     if (structure < 0) throw Error('Elevated edits require a structure');
@@ -101,6 +102,7 @@ export function moveStackEntry(input, index, direction) {
 }
 
 export function removeStackIndex(input, index) {
+  if (index < 0 || index >= input.length) return [...input];
   if (STRUCTURES.includes(input[index])) return removeStackEntry(input, input[index]);
   const stack = [...input];
   stack.splice(index, 1);
@@ -213,7 +215,13 @@ export function unpackLevel(source) {
   const collisionWidth = source.width / MASK_CELL;
   const collisionHeight = source.height / MASK_CELL;
   const collision = decodeRuns(source.collision, collisionWidth * collisionHeight, 'Collision');
-  if (!Array.isArray(source.player) || source.player.length !== 2 || !Array.isArray(source.enemies)) throw Error('Invalid level starts');
+  const validPoint = point => Array.isArray(point) && point.length === 2
+    && point.every(Number.isInteger)
+    && point[0] >= 0 && point[1] >= 0 && point[0] < source.width && point[1] < source.height;
+  if (!Number.isInteger(source.seed) || !validPoint(source.player) || !Array.isArray(source.enemies)
+    || source.enemies.some(enemy => !Array.isArray(enemy) || enemy.length !== 3
+      || !validPoint(enemy.slice(0, 2)) || enemy[2] !== 0 && enemy[2] !== 1)) throw Error('Invalid level starts');
+  if (source.wide !== undefined && source.wide !== 1) throw Error('Invalid wide terrain flag');
   const spawners = source.spawners === undefined ? [] : source.spawners;
   if (!Array.isArray(spawners) || spawners.length && spawners.length !== 4
     || spawners.some(point => !Array.isArray(point) || point.length !== 2
@@ -225,7 +233,7 @@ export function unpackLevel(source) {
     width: source.width,
     height: source.height,
     cell: MASK_CELL,
-    seed: source.seed || 1,
+    seed: source.seed,
     player: [...source.player],
     enemies: source.enemies.map(enemy => [...enemy]),
     spawners: spawners.map(point => [...point]),
@@ -1101,6 +1109,7 @@ export function drawTerrain(context, terrain, bounds) {
   const ex = Math.min(canvas.width, Math.ceil(bounds.right / scale));
   const ey = Math.min(canvas.height, Math.ceil(bounds.bottom / scale));
   context.imageSmoothingEnabled = false;
+  if (ex <= sx || ey <= sy) return;
   context.drawImage(canvas, sx, sy, ex - sx, ey - sy, sx * scale, sy * scale, (ex - sx) * scale, (ey - sy) * scale);
 }
 

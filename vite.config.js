@@ -1,5 +1,6 @@
-import { writeFile } from 'node:fs/promises';
+import { rename, rm, writeFile } from 'node:fs/promises';
 import { defineConfig } from 'vite';
+import { unpackLevel } from './src/terrain.js';
 
 // js13k ships a zip, not a web server, so every separate file costs twice:
 // once for the zip entry's own headers and filename, and again because each
@@ -8,7 +9,7 @@ import { defineConfig } from 'vite';
 // compresses as one continuous block.
 // Local authoring convenience only. The production build has no editor entry,
 // and this middleware is never emitted into the game archive.
-function saveLevel() {
+export function saveLevel(output = new URL('./src/levels/arena.json', import.meta.url)) {
   return {
     name: 'save-level',
     configureServer(server) {
@@ -18,18 +19,30 @@ function saveLevel() {
           return response.end();
         }
         let body = '';
+        let size = 0;
+        let tooLarge = false;
         request.setEncoding('utf8');
         request.on('data', chunk => {
-          body += chunk;
-          if (body.length > 200000) request.destroy();
+          size += Buffer.byteLength(chunk);
+          if (size > 200000) tooLarge = true;
+          else body += chunk;
         });
         request.on('end', async () => {
-          try {
-            JSON.parse(body);
-            await writeFile(new URL('./src/levels/arena.json', import.meta.url), body);
-            response.statusCode = 204;
-          } catch {
-            response.statusCode = 400;
+          if (tooLarge) response.statusCode = 413;
+          else {
+            try { unpackLevel(JSON.parse(body)); } catch {
+              response.statusCode = 400;
+              return response.end();
+            }
+            const temporary = new URL(`${output.href}.tmp`);
+            try {
+              await writeFile(temporary, body);
+              await rename(temporary, output);
+              response.statusCode = 204;
+            } catch {
+              await rm(temporary, { force: true });
+              response.statusCode = 500;
+            }
           }
           response.end();
         });

@@ -47,10 +47,11 @@ class FakeElement {
 }
 
 let terrainPuts = 0;
+const transforms = [];
 const drawingContext = {
   createImageData: (width, height) => ({ width, height, data: new Uint8ClampedArray(width * height * 4) }),
   putImageData() { terrainPuts++; },
-  setTransform() {}, fillRect() {}, drawImage() {}, beginPath() {}, moveTo() {}, lineTo() {}, stroke() {}, strokeRect() {},
+  setTransform(...args) { transforms.push(args); }, fillRect() {}, drawImage() {}, beginPath() {}, moveTo() {}, lineTo() {}, stroke() {}, strokeRect() {},
   fillStyle: '', strokeStyle: '', globalAlpha: 1, lineWidth: 1, imageSmoothingEnabled: false,
 };
 
@@ -97,7 +98,7 @@ const targets = ['auto', 'ground', 'upper'].map(target => {
   button.dataset.target = target;
   return button;
 });
-const actions = ['undo', 'redo', 'load', 'save'].map(action => {
+const actions = ['undo', 'redo', 'regen', 'load', 'save', 'download'].map(action => {
   const button = new FakeElement('button');
   button.dataset.action = action;
   return button;
@@ -112,30 +113,47 @@ const documentListeners = new Map();
 globalThis.document = {
   querySelector: selector => selectors.get(selector),
   querySelectorAll: selector => selector === '[data-kind]' ? kinds : selector === '[data-mode]' ? modes : selector === '[data-target]' ? targets : [],
-  createElement: tag => tag === 'canvas' ? new FakeCanvas() : new FakeElement(tag),
+  createElement: tag => {
+    if (tag === 'canvas') return new FakeCanvas();
+    const element = new FakeElement(tag);
+    if (tag === 'a') element.click = () => { downloads++; };
+    return element;
+  },
   addEventListener(type, handler) { documentListeners.set(type, handler); },
 };
 const windowElement = new FakeElement('window');
 globalThis.window = windowElement;
 globalThis.devicePixelRatio = 1;
 const raf = [];
+let animationTime = performance.now();
 globalThis.requestAnimationFrame = callback => { raf.push(callback); return raf.length; };
 
 let savedBody = '';
 let reloadBody = '';
+let lastFetchUrl = '';
+let failSave = false;
+let failLoad = false;
+let malformedLoad = false;
+let downloads = 0;
+globalThis.URL.createObjectURL = () => 'blob:test';
+globalThis.URL.revokeObjectURL = () => {};
+globalThis.Blob = class { constructor(parts) { this.parts = parts; } };
 globalThis.fetch = async (url, options = {}) => {
+  lastFetchUrl = String(url);
   if (options.method === 'POST') {
+    if (failSave) return { ok: false, status: 500 };
     savedBody = options.body;
     reloadBody = savedBody;
     return { ok: true, status: 204 };
   }
-  return { ok: true, json: async () => JSON.parse(reloadBody) };
+  if (failLoad) return { ok: false, status: 500 };
+  return { ok: true, json: async () => malformedLoad ? { broken: true } : JSON.parse(reloadBody) };
 };
 
 async function flushRaf(rounds = 3) {
   for (let round = 0; round < rounds; round++) {
     const callbacks = raf.splice(0);
-    for (const callback of callbacks) callback(performance.now());
+    for (const callback of callbacks) callback(animationTime += 1000 / 60);
     await Promise.resolve();
   }
 }
@@ -165,6 +183,8 @@ try {
   reloadBody = JSON.stringify((await import('../src/levels/level1.json', { with: { type: 'json' } })).default);
   await click(buttonFor(actions, 'action', 'load'));
   await flushRaf();
+  assert.match(lastFetchUrl, /\/src\/levels\/arena\.json\?t=/, 'Reload targeted a different level than Save');
+  assert.equal(status.textContent, 'Reloaded arena.json');
   terrainPuts = 1;
 
   // A tool change during a captured gesture must not change that gesture's material.
@@ -194,6 +214,9 @@ try {
   await canvas.dispatch('pointerup', { clientX: -5000, clientY: -5000, pointerId: 12 });
   await flushRaf();
   assert.equal(stackKeyAt(await saveLevel(), 31, 10), 'gw', 'Captured outside release lost the gesture');
+  await click(buttonFor(actions, 'action', 'redo'));
+  await flushRaf();
+  assert.equal(stackKeyAt(await saveLevel(), 30, 10), 'g', 'A new gesture did not invalidate stale redo history');
 
   // Cancellation and lost capture intentionally commit the selected cells once.
   for (const [x, event, pointerId] of [[32, 'pointercancel', 13], [33, 'lostpointercapture', 14]]) {
@@ -205,6 +228,29 @@ try {
   saved = await saveLevel();
   assert.equal(stackKeyAt(saved, 32, 10), 'gw');
   assert.equal(stackKeyAt(saved, 33, 10), 'gw');
+
+  // A large brush plus a fast drag interpolates every crossed tile. Right
+  // click erases the selected material through the same captured gesture path.
+  size.value = '3';
+  await size.dispatch('input');
+  assert.equal(sizeValue.value, '3');
+  await click(buttonFor(kinds, 'kind', 'dirt'));
+  const dragStart = pointForTile(40, 10);
+  const dragEnd = pointForTile(42, 10);
+  await canvas.dispatch('pointerdown', { ...dragStart, pointerId: 141 });
+  await canvas.dispatch('pointermove', { ...dragEnd, pointerId: 141 });
+  await canvas.dispatch('pointerup', { ...dragEnd, pointerId: 141 });
+  await flushRaf();
+  saved = await saveLevel();
+  for (let y = 9; y <= 11; y++) for (let x = 39; x <= 43; x++) {
+    assert.ok(stackKeyAt(saved, x, y).includes('d'), `Brush drag skipped ${x},${y}`);
+  }
+  size.value = '1';
+  await size.dispatch('input');
+  await canvas.dispatch('pointerdown', { ...pointForTile(40, 10), button: 2, pointerId: 142 });
+  await canvas.dispatch('pointerup', { ...pointForTile(40, 10), button: 2, pointerId: 142 });
+  await flushRaf();
+  assert.ok(!stackKeyAt(await saveLevel(), 40, 10).includes('d'), 'Right-click did not erase the selected material');
 
   // Rectangle uses real handlers and commits one canonical operation to every cell.
   await click(buttonFor(kinds, 'kind', 'floor'));
@@ -270,6 +316,29 @@ try {
   await flushRaf();
   assert.equal(stackKeyAt(await saveLevel(), 35, 10), 'g^f');
 
+  // Inspect displays the true top-to-bottom stack, pins the selected row's
+  // band, and makes reorder/removal one undoable canonical edit.
+  await click(buttonFor(modes, 'mode', 'inspect'));
+  await canvas.dispatch('pointerdown', { ...structurePoint, pointerId: 211 });
+  assert.equal(inspectorLayers.children.length, 3);
+  assert.match(inspectorLayers.children[0].children[0].textContent, /Floor · Elevated/);
+  assert.match(inspectorLayers.children[1].children[0].textContent, /Stairs · Structure/);
+  assert.match(inspectorLayers.children[2].children[0].textContent, /Grass · Ground/);
+  await click(inspectorLayers.children[2].children[0]);
+  assert.ok(buttonFor(kinds, 'kind', 'grass').classList.values.has('is-active'));
+  assert.ok(buttonFor(targets, 'target', 'ground').classList.values.has('is-active'));
+  await click(inspectorLayers.children[0].children[2]);
+  await flushRaf();
+  assert.equal(stackKeyAt(await saveLevel(), 35, 10), 'gf^', 'Inspector did not move an entry across the structure');
+  await click(buttonFor(actions, 'action', 'undo'));
+  await flushRaf();
+  assert.equal(stackKeyAt(await saveLevel(), 35, 10), 'g^f');
+  await click(inspectorLayers.children[0].children[3]);
+  await flushRaf();
+  assert.equal(stackKeyAt(await saveLevel(), 35, 10), 'g^', 'Inspector remove did not delete the selected row');
+  await click(buttonFor(actions, 'action', 'undo'));
+  await flushRaf();
+
   // Clicking the visible lower half of a Wall redirects Stairs to its anchor.
   await click(buttonFor(modes, 'mode', 'pencil'));
   await click(buttonFor(kinds, 'kind', 'wall'));
@@ -325,6 +394,22 @@ try {
   await click(buttonFor(actions, 'action', 'redo'));
   await flushRaf();
 
+  // Inspector communicates unsupported decorations and rejects a reorder that
+  // would create a duplicate material across the structure.
+  saved = await saveLevel();
+  saved.tileStacks[10 * saved.tileWidth + 44] = ['b'];
+  saved.tileStacks[10 * saved.tileWidth + 45] = ['g', '^', 'g'];
+  reloadBody = JSON.stringify(packLevel(saved));
+  await click(buttonFor(actions, 'action', 'load'));
+  await flushRaf();
+  await click(buttonFor(modes, 'mode', 'inspect'));
+  await canvas.dispatch('pointerdown', { ...pointForTile(44, 10), pointerId: 271 });
+  assert.match(inspectorLayers.children[0].children[0].textContent, /needs surface/);
+  await canvas.dispatch('pointerdown', { ...pointForTile(45, 10), pointerId: 272 });
+  await click(inspectorLayers.children[0].children[2]);
+  assert.match(status.textContent, /duplicate/i);
+  assert.equal(stackKeyAt(await saveLevel(), 45, 10), 'g^g', 'Rejected inspector reorder changed the stack');
+
   // Fine Collision remains independent and survives save/reload.
   await click(buttonFor(targets, 'target', 'auto'));
   await click(buttonFor(modes, 'mode', 'pencil'));
@@ -335,11 +420,69 @@ try {
   await flushRaf();
   saved = await saveLevel();
   assert.equal(collisionAt(saved, 150, 100), 1);
+  await click(buttonFor(modes, 'mode', 'rectangle'));
+  await canvas.dispatch('pointerdown', { ...pointForTile(150, 100, true), pointerId: 281 });
+  await canvas.dispatch('pointermove', { ...pointForTile(151, 101, true), pointerId: 281 });
+  await canvas.dispatch('pointerup', { ...pointForTile(151, 101, true), pointerId: 281 });
+  await flushRaf();
+  saved = await saveLevel();
+  for (let y = 100; y <= 101; y++) for (let x = 150; x <= 151; x++) assert.equal(collisionAt(saved, x, y), 1);
+  await click(buttonFor(modes, 'mode', 'fill'));
+  await canvas.dispatch('pointerdown', { ...pointForTile(150, 100, true), button: 2, pointerId: 282 });
+  await flushRaf();
+  saved = await saveLevel();
+  for (let y = 100; y <= 101; y++) for (let x = 150; x <= 151; x++) assert.equal(collisionAt(saved, x, y), 0);
+
   const stable = savedBody;
   await click(buttonFor(actions, 'action', 'load'));
   await flushRaf();
   await saveLevel();
   assert.equal(savedBody, stable, 'Save/reload changed canonical stack or Collision data');
+
+  // Regeneration is one undoable seed edit. Representative keyboard bindings
+  // select tools/materials and Escape clears a pinned band.
+  const seedBefore = Number(seed.textContent);
+  await click(buttonFor(actions, 'action', 'regen'));
+  await flushRaf();
+  assert.equal(Number(seed.textContent), seedBefore + 1);
+  await click(buttonFor(actions, 'action', 'undo'));
+  await flushRaf();
+  assert.equal(Number(seed.textContent), seedBefore);
+  await windowElement.dispatch('keydown', { key: '3', code: 'Digit3', target: new FakeElement('div') });
+  assert.ok(buttonFor(kinds, 'kind', 'water').classList.values.has('is-active'));
+  await windowElement.dispatch('keydown', { key: 'r', code: 'KeyR', target: new FakeElement('div') });
+  assert.ok(buttonFor(modes, 'mode', 'rectangle').classList.values.has('is-active'));
+  const scaleBeforeWheel = transforms.at(-1)[0];
+  await canvas.dispatch('wheel', { ...pointForTile(30, 10), deltaY: -1000 });
+  await flushRaf(1);
+  assert.ok(transforms.at(-1)[0] > scaleBeforeWheel, 'Wheel zoom did not change the world transform');
+  const offsetBeforePan = transforms.at(-1)[4];
+  await windowElement.dispatch('keydown', { key: 'd', code: 'KeyD', target: new FakeElement('div') });
+  await flushRaf(2);
+  await windowElement.dispatch('keyup', { key: 'd', code: 'KeyD' });
+  assert.notEqual(transforms.at(-1)[4], offsetBeforePan, 'Held keyboard pan did not move the camera');
+  await click(buttonFor(targets, 'target', 'ground'));
+  await windowElement.dispatch('keydown', { key: 'Escape', code: 'Escape', target: new FakeElement('div') });
+  assert.ok(buttonFor(targets, 'target', 'auto').classList.values.has('is-active'));
+
+  // HTTP failures are visible and Save falls back to a download without
+  // changing the in-memory canonical level.
+  failLoad = true;
+  await click(buttonFor(actions, 'action', 'load'));
+  assert.equal(status.textContent, 'Reload failed');
+  failLoad = false;
+  malformedLoad = true;
+  await click(buttonFor(actions, 'action', 'load'));
+  assert.equal(status.textContent, 'Reload failed');
+  malformedLoad = false;
+  failSave = true;
+  const downloadsBefore = downloads;
+  await click(buttonFor(actions, 'action', 'save'));
+  assert.equal(downloads, downloadsBefore + 1, 'Failed save did not download a fallback');
+  assert.match(status.textContent, /downloaded JSON/);
+  failSave = false;
+  await click(buttonFor(actions, 'action', 'download'));
+  assert.equal(downloads, downloadsBefore + 2, 'Explicit Download did not create a file');
 
   console.log('editor stack gesture smoke checks passed');
 } finally {

@@ -477,9 +477,9 @@ panel.addEventListener('click', async event => {
     rendering = true;
     setStatus('Loading…');
     try {
-      const response = await fetch(`/src/levels/level1.json?t=${Date.now()}`);
+      const response = await fetch(`/src/levels/arena.json?t=${Date.now()}`);
       if (!response.ok) throw Error();
-      restore(JSON.stringify(await response.json()), 'Reloaded level1.json');
+      restore(JSON.stringify(await response.json()), 'Reloaded arena.json');
       undoStack.length = redoStack.length = 0;
     } catch {
       rendering = false;

@@ -1,12 +1,16 @@
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { readFileSync, writeFileSync } from 'node:fs';
 import {
   AUTHOR_TILE,
   MAX_STACK_ENTRIES,
   addStackEntry,
+  automaticBand,
   collisionAt,
+  drawTerrain,
   editStackCells,
   isWalkable,
+  materialName,
   moveOnTerrain,
   moveStackEntry,
   packLevel,
@@ -16,6 +20,7 @@ import {
   removeStackIndex,
   stackAt,
   stackKeyAt,
+  terrainHash,
   terrainSignature,
   unpackLevel,
   validateStack,
@@ -42,6 +47,12 @@ stack = addStackEntry(stack, 'floor');
 stack = addStackEntry(stack, 'grass');
 stack = addStackEntry(stack, 'water');
 assert.equal(key(stack), 'fg#fgw');
+assert.equal(automaticBand(['g']), 'ground');
+assert.equal(automaticBand(['g', '#']), 'upper');
+assert.equal(materialName('^'), 'stairs');
+assert.equal(materialName('?'), undefined);
+assert.equal(terrainHash(4, 7, 9), terrainHash(4, 7, 9));
+assert.notEqual(terrainHash(4, 7, 9), terrainHash(4, 7, 10));
 assert.equal(key(addStackEntry(['#', 'f', 'g'], 'floor')), '#gf');
 assert.equal(key(addStackEntry(['f', '#', 'g'], 'dirt', 'ground')), 'fd#g');
 assert.equal(key(addStackEntry(['f', '#', 'g'], 'stairs')), 'f^g');
@@ -49,9 +60,16 @@ assert.equal(key(addStackEntry(['f', '^', 'g'], 'wall')), 'f#g');
 assert.deepEqual(removeStackEntry(['g', '#', 'f', 'g'], 'wall'), ['f', 'g']);
 assert.deepEqual(removeStackEntry(['g', '^', 'f', 'g'], 'stairs'), ['f', 'g']);
 assert.deepEqual(removeStackIndex(['g', '#', 'f'], 1), ['g', 'f']);
+assert.deepEqual(removeStackIndex(['g'], -1), ['g']);
 assert.deepEqual(moveStackEntry(['f', 'g'], 0, 1), ['g', 'f']);
+assert.deepEqual(moveStackEntry(['f', 'g'], 0, -1), ['f', 'g']);
+assert.deepEqual(moveStackEntry(['f', 'g'], 1, 1), ['f', 'g']);
 assert.throws(() => moveStackEntry(['g', '#', 'g'], 1, 1), /duplicate/i);
 assert.throws(() => addStackEntry(['g'], 'floor', 'upper'), /require.*structure/i);
+assert.throws(() => removeStackEntry(['g'], 'grass', 'upper'), /require.*structure/i);
+assert.throws(() => addStackEntry(['g'], 'floor', 'side'), /unknown.*band/i);
+assert.throws(() => removeStackEntry(['g'], 'grass', 'side'), /unknown.*band/i);
+assert.throws(() => addStackEntry(['g'], 'unknown'), /unknown/i);
 assert.throws(() => addStackEntry(['g', 'd', 'w', 'f', 'b', 's', '#', 'g', 'f'], 'dirt'), /full/);
 assert.throws(() => validateStack(['g', 'g']), /duplicate/i);
 assert.throws(() => validateStack(['g', '#', '^', 'f']), /multiple structures/i);
@@ -65,7 +83,7 @@ function blank(width = 160, height = 128, seed = 3) {
     height,
     cell: 8,
     seed,
-    player: [48, 48],
+    player: [Math.min(48, width - 1), Math.min(48, height - 1)],
     enemies: [],
     tileWidth,
     tileHeight,
@@ -86,7 +104,10 @@ assert.throws(() => editStackCells(edited, [[1, 1], [2, 1]], (value, x) => {
   return addStackEntry(value, 'grass');
 }));
 assert.equal(edited.tileStacks.map(key).join('|'), beforeAtomic, 'Rejected gesture partially committed');
+assert.ok(!editStackCells(edited, [[-1, 0], [99, 99]], stack => addStackEntry(stack, 'grass')));
+assert.ok(!editStackCells(edited, [[1, 1], [1, 1]], stack => [...stack]));
 assert.equal(stackAt(edited, -1, 0), null);
+assert.equal(stackKeyAt(edited, 99, 99), null);
 
 const movement = blank();
 movement.tileStacks[1] = ['w'];
@@ -99,16 +120,29 @@ assert.ok(!isWalkable(movement, 80, 16), 'Decoration created support');
 assert.ok(isWalkable(movement, 112, 16), 'Wall implied Collision');
 assert.ok(isWalkable(movement, 144, 16), 'Elevated Water should be walkable');
 assert.ok(isWalkable(movement, 16, 48), 'Stairs with an Elevated surface should be walkable');
-paintCollisionCell(movement, 6, 2, 1);
+assert.equal(collisionAt(movement, -1, 0), 0);
+assert.ok(!paintCollisionCell(movement, -1, 0, 1));
+assert.ok(paintCollisionCell(movement, 6, 2, 1));
+assert.ok(!paintCollisionCell(movement, 6, 2, 1));
 assert.ok(!isWalkable(movement, 48, 16), 'Collision did not block Water');
-paintCollisionRect(movement, 6, 2, 7, 3, 0);
+assert.ok(paintCollisionRect(movement, 6, 2, 7, 3, 0));
+assert.ok(!paintCollisionRect(movement, 6, 2, 7, 3, 0));
 assert.equal(collisionAt(movement, 6, 2), 0);
+assert.ok(!isWalkable(movement, 32, 16, 17), 'Radius check ignored unsupported neighbouring terrain');
+const stationary = { x: 48, y: 16 };
+assert.equal(moveOnTerrain(movement, stationary, 0, 0, 2), 0);
+assert.deepEqual(stationary, { x: 48, y: 16 });
 const body = { x: 48, y: 16 };
-moveOnTerrain(movement, body, 200, 0, 2);
+const blocked = moveOnTerrain(movement, body, 200, 30, 2);
+assert.ok(blocked & 1, 'Substepped movement did not report its blocked axis');
 assert.ok(body.x < 80, 'Substepped movement crossed unsupported terrain');
+assert.ok(body.y > 16, 'Axis separation did not slide along the open axis');
 
 const packed = packLevel(level);
 const roundTrip = unpackLevel(packed);
+const zeroSeed = unpackLevel({ ...packed, seed: 0 });
+assert.equal(zeroSeed.seed, 0, 'Valid zero seed was silently replaced');
+assert.equal(packLevel(zeroSeed).seed, 0);
 assert.equal(terrainSignature(roundTrip), terrainSignature(level));
 assert.deepEqual(packLevel(roundTrip), packed);
 assert.ok(!packed.wide, 'Current test level unexpectedly exceeded the nibble palette');
@@ -123,11 +157,36 @@ const widePacked = packLevel(wide);
 assert.equal(widePacked.wide, 1);
 assert.equal(terrainSignature(unpackLevel(widePacked)), terrainSignature(wide));
 
+const paletteOverflow = blank(AUTHOR_TILE * 257, AUTHOR_TILE);
+const uniqueStacks = [];
+const collectStacks = (prefix, remaining) => {
+  if (prefix.length) uniqueStacks.push(prefix);
+  if (uniqueStacks.length > 256) return;
+  for (let index = 0; index < remaining.length; index++) {
+    collectStacks([...prefix, remaining[index]], remaining.filter((_, candidate) => candidate !== index));
+    if (uniqueStacks.length > 256) return;
+  }
+};
+collectStacks([], [...'gdwfbs']);
+paletteOverflow.tileStacks = uniqueStacks.slice(0, 257);
+assert.throws(() => packLevel(paletteOverflow), /more than 256/i);
+
 for (const broken of [
+  null,
   { ...packed, width: 31 },
+  { ...packed, cell: 4 },
+  { ...packed, seed: 1.5 },
+  { ...packed, player: [Infinity, 2] },
+  { ...packed, player: [-1, 2] },
+  { ...packed, enemies: [[1, 2]] },
+  { ...packed, enemies: [[1, 2, 2]] },
+  { ...packed, enemies: [[packed.width, 2, 0]] },
+  { ...packed, stacks: [] },
   { ...packed, stacks: ['gg'] },
   { ...packed, stacks: ['#', '^'] },
+  { ...packed, stacks: [packed.stacks[0], packed.stacks[0]] },
   { ...packed, tiles: '' },
+  { ...packed, wide: 2 },
   { ...packed, collision: 'AAA=' },
 ]) assert.throws(() => unpackLevel(broken));
 
@@ -157,6 +216,19 @@ function fakeCanvas() {
   return canvas;
 }
 
+const terrainDraws = [];
+const terrainContext = {
+  imageSmoothingEnabled: true,
+  drawImage(...args) { terrainDraws.push(args); },
+};
+const terrainCanvas = { width: 100, height: 80 };
+drawTerrain(terrainContext, { canvas: terrainCanvas, scale: 2 }, { left: -5, top: 3, right: 41, bottom: 29 });
+assert.equal(terrainContext.imageSmoothingEnabled, false);
+assert.deepEqual(terrainDraws[0].slice(1), [0, 1, 21, 14, 0, 2, 42, 28], 'Terrain crop did not clip/scale consistently');
+drawTerrain(terrainContext, { canvas: terrainCanvas, scale: 1 }, { left: 200, top: 0, right: 220, bottom: 20 });
+drawTerrain(terrainContext, { canvas: terrainCanvas, scale: 1 }, { left: 0, top: 90, right: 20, bottom: 100 });
+assert.equal(terrainDraws.length, 1, 'Off-canvas terrain bounds issued a negative/empty draw');
+
 const visual = blank(320, 224, 19);
 for (let y = 0; y < visual.tileHeight; y++) for (let x = 0; x < visual.tileWidth; x++) {
   visual.tileStacks[y * visual.tileWidth + x] = ['f'];
@@ -183,6 +255,8 @@ const canvas = fakeCanvas();
 buildTerrain(visual, 1, canvas);
 const firstPixels = canvas.pixels();
 assert.ok(firstPixels.every((value, index) => index % 4 !== 3 || value === 255), 'Terrain cache contains transparent gaps');
+const visualDigest = createHash('sha256').update(firstPixels).digest('hex');
+assert.equal(visualDigest, '5ff439fba3f25868ffe220d44aee825bb9e203b83c7392602d9c09881cd91c74', 'Representative terrain pixels changed; inspect intentional art changes before updating this digest');
 const pixelAt = (pixels, x, y) => [...pixels.slice((y * visual.width + x) * 4, (y * visual.width + x) * 4 + 3)];
 // Structural bevel samples are asserted against their named palette steps;
 // broad stone and ground materials carry tonal noise, so their interiors are

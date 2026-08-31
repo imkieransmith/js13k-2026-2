@@ -49,6 +49,20 @@ assert.throws(() => unpackLevel({ ...source, spawners: [[1, 2]] }), /spawner/i);
 assert.throws(() => unpackLevel({ ...source, spawners: [[1, 2], [3, 4], [5, 6], [Infinity, 8]] }), /spawner/i);
 assert.throws(() => unpackLevel({ ...source, spawners: [[1, 2], [3, 4], [5, 6], [7.5, 8]] }), /spawner/i);
 assert.deepEqual(packLevel(unpackLevel(source)), source, 'Arena pack/unpack changed its metadata');
+assert.equal(createArena([], 9), null, 'A map without gates created an arena director');
+const offsetArena = createArena(level.spawners, 17);
+assert.equal(offsetArena.nextId, 17);
+assert.equal(offsetArena.clock, 2.4);
+assert.deepEqual([...offsetArena.flash], [0, 0, 0, 0]);
+updateArena(null, 99, 0, level.player, [], () => assert.fail('Null arena emitted an enemy'));
+assert.equal(arenaCap(14), 6);
+assert.equal(arenaCap(15), 7);
+assert.equal(arenaCap(59), 9);
+assert.equal(arenaCap(60), 10);
+assert.equal(arenaDelay(0), 1.4);
+assert.equal(arenaDelay(1), 1.39);
+assert.equal(arenaDelay(60), 0.8);
+assert.equal(arenaDelay(100), 0.8);
 
 // With no kills, the director fills its initial cap and remains bounded.
 let arena = createArena(level.spawners);
@@ -58,9 +72,26 @@ for (let frame = 0; frame < 60 * 30; frame++) {
 }
 assert.equal(held.length, 6, 'Initial living-enemy cap was not enforced');
 assert.equal(arenaCap(0), 6);
-assert.equal(arenaCap(60), 10);
-assert.equal(arenaDelay(0), 1.4);
-assert.equal(arenaDelay(100), 0.8);
+
+// A full cap polls at a short interval, then resumes without changing the
+// schedule or consuming an ID once a living slot opens.
+const capped = createArena(level.spawners, 12);
+capped.clock = 0;
+updateArena(capped, 1, 6, { x: level.player[0], y: level.player[1] }, level.spawners, () => assert.fail('Director emitted above its cap'));
+assert.equal(capped.clock, 0.2);
+assert.equal(capped.count, 0);
+assert.equal(capped.nextId, 12);
+const resumed = [];
+updateArena(capped, 0.2, 5, { x: level.player[0], y: level.player[1] }, level.spawners, arrival => resumed.push(arrival));
+assert.deepEqual(resumed, [{ id: 12, gate: 0, type: 0 }]);
+
+// Flash state decays independently of whether the director is still in grace.
+capped.flash[2] = 1;
+capped.clock = 10;
+updateArena(capped, 0.25, 0, { x: level.player[0], y: level.player[1] }, level.spawners, () => {});
+assert.ok(Math.abs(capped.flash[2] - 0.55) < 1e-6);
+updateArena(capped, 1, 0, { x: level.player[0], y: level.player[1] }, level.spawners, () => {});
+assert.equal(capped.flash[2], 0);
 
 // A camped gate is skipped rather than creating contact damage, and even a
 // tab-sized timestep emits at most one enemy rather than a catch-up burst.
@@ -72,6 +103,16 @@ assert.equal(skipped[0].gate, 1);
 updateArena(arena, 99, 0, { x: 960, y: 640 }, level.spawners, arrival => skipped.push(arrival));
 assert.equal(skipped.length, 2, 'Large timestep emitted a catch-up burst');
 assert.equal(skipped[1].gate, 2, 'Skipped gate broke stable rotation');
+
+// If every gate is camped, polling waits without mutating gate/count/IDs.
+const surrounded = createArena(level.spawners, 4);
+surrounded.clock = 0;
+const closeSpawners = [[0, 0], [5, 0], [0, 5], [5, 5]];
+updateArena(surrounded, 1, 0, { x: 2, y: 2 }, closeSpawners, () => assert.fail('Camped gates emitted'));
+assert.equal(surrounded.clock, 0.2);
+assert.equal(surrounded.gate, 0);
+assert.equal(surrounded.count, 0);
+assert.equal(surrounded.nextId, 4);
 
 // Fast kills force a long run through IDs beyond the old 32-bit hit-mask limit.
 arena = createArena(level.spawners);

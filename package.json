@@ -8,7 +8,8 @@
     "build": "vite build && npm run package",
     "package": "node scripts/package.js",
     "preview": "vite preview",
-    "test": "node scripts/terrain-smoke.js && node scripts/terrain-stack-smoke.js && node scripts/arena-smoke.js && node scripts/editor-stack-smoke.js && node scripts/game-smoke.js",
+    "test": "node scripts/terrain-smoke.js && node scripts/arena-smoke.js && node scripts/editor-stack-smoke.js && node scripts/game-smoke.js && node scripts/tooling-smoke.js",
+    "test:prototype": "node scripts/terrain-stack-smoke.js",
     "preview:art": "node scripts/terrain-preview.js",
     "preview:frame": "node scripts/frame-preview.js"
   },
