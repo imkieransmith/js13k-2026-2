@@ -269,9 +269,33 @@ const SOUNDS = {
   // Ignition climbs into the pitch the hold then sustains, so the two are one
   // sound rather than a noise followed by a tone.
   beam: [[87, 0, .34, .034, 348, 2], [400, 0, .22, .045, 1900, 4]],
-  // Magic thrown, and magic landing: the same voice an octave and a half
-  // apart, one leaving with force and one arriving without any.
-  shot: [[300, 0, .18, .04, 90, 2], [1300, 0, .07, .06, 260, 4]],
+  // Dark magic thrown. Everything here is the inverse of the llamacorn's own:
+  // the rainbow rises, this sags; the rainbow holds a clean fifth, this holds
+  // a pair too close together to be an interval at all.
+  //
+  // The pitches are 155, 265, 276 and 445: ratios of 1.71 and 2.87, which are
+  // not harmonics of the bottom note and not intervals either, so the ear
+  // cannot fuse them into one pitch. That refusal to resolve into a note is
+  // what bells and gongs have and what a struck tube does not — and a struck
+  // tube is exactly what this was when every voice was a triangle. A triangle
+  // carries only odd harmonics falling away as 1/n², which is the spectrum of
+  // a pipe; it is why a clarinet sounds hollow, and it was why this sounded
+  // like bamboo. The bottom voice is a sawtooth now for density underneath.
+  //
+  // 265 and 276 are 4% apart and beat eleven times a second, slowing to six
+  // as they sag: a flutter, something not holding together. That is the exact
+  // trick that had to come out of the beam, where a detuned pair turned into
+  // buzz, and it survives here because it is over in a fifth of a second
+  // rather than sustained. A falling sawtooth alone is what made this an
+  // arcade pew, which is the most generic shot in games.
+  shot: [
+    [155, 0, .22, .043, 88, 2, .015],
+    [265, 0, .2, .03, 150, 3, .02],
+    [276, 0, .2, .026, 156, 3, .03],
+    [445, 0, .16, .022, 252, 3, .01],
+    [1100, 0, .09, .042, 250, 4, .006],
+  ],
+  // The same magic arriving instead of leaving, and with none of the force.
   pop: [[260, 0, .11, .04, 70, 3], [800, 0, .09, .06, 130, 4]],
   // Llamas walk on pads, not hooves — the legs are drawn for it too — so this
   // is a soft weight landing on sand with a scuff of grit over it rather than
