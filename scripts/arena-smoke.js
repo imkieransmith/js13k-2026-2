@@ -20,7 +20,7 @@ assert.ok(!source.wide && source.stacks.length <= 16, 'Arena escaped nibble tile
 
 const level = unpackLevel(source);
 assert.equal(level.width, 1920);
-assert.equal(level.height, 1280);
+assert.equal(level.height, 1472);
 assert.equal(level.spawners.length, 4);
 const [north, east, south, west] = level.spawners;
 assert.ok(north[0] === level.player[0] && north[1] < level.player[1]);
@@ -43,7 +43,39 @@ for (const gate of level.spawners) {
   }
 }
 assert.ok(!isWalkable(level, 100, 100, 12), 'Outer water/bounds unexpectedly became playable');
-assert.ok(stackAt(level, 30, 14).includes('^'), 'North gate lost its staircase');
+assert.ok(stackAt(level, 30, 9).includes('^'), 'North gate lost its staircase');
+
+// The arena is one geometry, so the masonry that is drawn has to be exactly
+// the masonry that stops the player. Both halves of that are asserted: no
+// standing Wall is walkable, and no Wall's front face — drawn onto the tile
+// below it — is walkable either.
+for (let tileY = 0; tileY < level.tileHeight; tileY++) {
+  for (let tileX = 0; tileX < level.tileWidth; tileX++) {
+    const above = stackAt(level, tileX, tileY - 1);
+    if (!stackAt(level, tileX, tileY).includes('#') && !(above && above.includes('#'))) continue;
+    for (const [offsetX, offsetY] of [[4, 4], [28, 4], [4, 28], [28, 28], [16, 16]]) {
+      assert.ok(
+        !isWalkable(level, tileX * 32 + offsetX, tileY * 32 + offsetY),
+        `Masonry at tile ${tileX},${tileY} is walkable`,
+      );
+    }
+  }
+}
+
+// The fighting floor has to stay comfortably larger than one viewport, which
+// is the whole reason the map grew; a smaller arena plays as a single screen.
+let walkableWidth = 0;
+let walkableHeight = 0;
+for (let x = 0; x < level.width; x += 8) if (isWalkable(level, x, level.player[1], 12)) walkableWidth += 8;
+for (let y = 0; y < level.height; y += 8) if (isWalkable(level, level.player[0], y, 12)) walkableHeight += 8;
+assert.ok(walkableWidth > 1200, `Arena is only ${walkableWidth} wide through its centre`);
+assert.ok(walkableHeight > 800, `Arena is only ${walkableHeight} tall through its centre`);
+
+// Cover on the sand must never sit on a gate's approach, or the director can
+// deliver a Construct into a blocked lane.
+for (const gate of level.spawners) {
+  assert.ok(isWalkable(level, (gate[0] + level.player[0]) / 2, (gate[1] + level.player[1]) / 2, 12));
+}
 assert.throws(() => unpackLevel({ ...source, spawners: 0 }), /spawner/i);
 assert.throws(() => unpackLevel({ ...source, spawners: [[1, 2]] }), /spawner/i);
 assert.throws(() => unpackLevel({ ...source, spawners: [[1, 2], [3, 4], [5, 6], [Infinity, 8]] }), /spawner/i);

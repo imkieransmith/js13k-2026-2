@@ -1,5 +1,6 @@
 import { rename, rm, writeFile } from 'node:fs/promises';
 import { defineConfig } from 'vite';
+import { Packer } from 'roadroller';
 import { unpackLevel } from './src/terrain.js';
 
 // js13k ships a zip, not a web server, so every separate file costs twice:
@@ -55,7 +56,7 @@ function inlineEverything() {
   return {
     name: 'inline-everything',
     enforce: 'post',
-    generateBundle(_options, bundle) {
+    async generateBundle(_options, bundle) {
       const html = Object.values(bundle).find(f => f.fileName.endsWith('.html'));
       if (!html) return;
       let source = html.source;
@@ -88,7 +89,29 @@ function inlineEverything() {
         delete bundle[name];
       }
 
-      html.source = source;
+      // Vite deliberately preserves authored HTML comments and formatting.
+      // They are useful in the readable source but have no place in the 13KB
+      // archive; remove only inter-tag whitespace so text/attribute semantics
+      // remain untouched.
+      source = source.replace(/<!--[\s\S]*?-->/g, '').replace(/>\s+</g, '><').trim();
+
+      // Roadroller models the already tree-shaken/minified program as a whole.
+      // This is production-only: development still executes the readable
+      // module directly, while the inline module keeps its deferred execution
+      // and therefore still starts after the DOM has been parsed.
+      const script = source.match(/<script type=module>([\s\S]*?)<\/script>/);
+      if (!script) this.error('Could not locate the inlined production module');
+      const packer = new Packer([{ data: script[1], type: 'js', action: 'eval' }], { maxMemoryMB: 150 });
+      // Selector search uses Math.random. Seed it locally so identical source
+      // produces byte-identical archives rather than merely equivalent code.
+      const random = Math.random;
+      let seed = 0x13_2026;
+      Math.random = () => (seed = Math.imul(seed, 1664525) + 1013904223 >>> 0) / 4294967296;
+      try { await packer.optimize(1); } finally { Math.random = random; }
+      const { firstLine, secondLine } = packer.makeDecoder();
+      const packed = `${firstLine}\n${secondLine}`;
+      if (packed.includes('</script>')) this.error('Packed module contains a closing script tag');
+      html.source = source.replace(script[1], packed);
     },
   };
 }
@@ -111,7 +134,9 @@ export default defineConfig({
     minify: 'terser',
     terserOptions: {
       compress: { passes: 3, drop_console: true },
-      mangle: { toplevel: true },
+      // Browser/DOM built-ins remain reserved by Terser; only project-owned
+      // object keys are shortened consistently across their definitions/uses.
+      mangle: { toplevel: true, properties: {} },
       format: { comments: false },
     },
   },

@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { createServer } from 'vite';
 import { collisionAt, packLevel, stackKeyAt, unpackLevel } from '../src/terrain.js';
+import { ARENA_HEIGHT, ARENA_WIDTH } from './build-arena.js';
 
 /** Minimal DOM/event harness that executes the shipped editor module through Vite. */
 class FakeClassList {
@@ -159,11 +160,19 @@ async function flushRaf(rounds = 3) {
 }
 const click = button => panel.dispatch('click', { target: button });
 const buttonFor = (list, key, value) => list.find(button => button.dataset[key] === value);
+// The editor centres its camera on the level it boots with and keeps it there
+// across reloads, so screen space is anchored to the arena's dimensions rather
+// than to whichever fixture a case happens to have loaded. Taking those from
+// the recipe stops a resized arena silently aiming every gesture at the wrong
+// tile — which is exactly how this helper failed once already.
 const pointForTile = (x, y, fine = false) => {
   const cell = fine ? 8 : 32;
   const worldX = x * cell + cell / 2;
   const worldY = y * cell + cell / 2;
-  return { clientX: 400 + (worldX - 960) * 0.55, clientY: 300 + (worldY - 640) * 0.55 };
+  return {
+    clientX: 400 + (worldX - ARENA_WIDTH / 2) * 0.55,
+    clientY: 300 + (worldY - ARENA_HEIGHT / 2) * 0.55,
+  };
 };
 async function saveLevel() {
   await click(buttonFor(actions, 'action', 'save'));

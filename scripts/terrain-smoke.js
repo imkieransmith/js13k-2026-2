@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { readFileSync, writeFileSync } from 'node:fs';
+import { readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import {
   AUTHOR_TILE,
   MAX_STACK_ENTRIES,
@@ -22,6 +22,7 @@ import {
   stackKeyAt,
   terrainHash,
   terrainSignature,
+  unpackGameLevel,
   unpackLevel,
   validateStack,
   buildTerrain,
@@ -30,7 +31,18 @@ import {
   RAISED_LIFT,
 } from '../src/terrain.js';
 
-const source = JSON.parse(readFileSync(new URL('../src/levels/level1.json', import.meta.url)));
+const levelDirectory = new URL('../src/levels/', import.meta.url);
+for (const filename of readdirSync(levelDirectory).filter(name => name.endsWith('.json'))) {
+  const packed = JSON.parse(readFileSync(new URL(filename, levelDirectory)));
+  const strict = unpackLevel(packed);
+  const trusted = unpackGameLevel(packed);
+  for (const field of [
+    'width', 'height', 'cell', 'seed', 'player', 'enemies', 'spawners',
+    'tileWidth', 'tileHeight', 'collisionWidth', 'collisionHeight', 'tileStacks', 'collision',
+  ]) assert.deepEqual(trusted[field], strict[field], `${filename} trusted decoder changed ${field}`);
+}
+
+const source = JSON.parse(readFileSync(new URL('level1.json', levelDirectory)));
 const level = unpackLevel(source);
 assert.equal(level.width, 2400);
 assert.equal(level.height, 1600);

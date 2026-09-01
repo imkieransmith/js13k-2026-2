@@ -173,13 +173,15 @@ try {
   // The two supported headless visual feedback commands must produce valid,
   // non-empty images at their requested crop dimensions.
   const terrainPath = join(temporaryRoot, 'terrain.png');
-  execFileSync(process.execPath, ['scripts/terrain-preview.js', terrainPath, '800,520,320,240'], { stdio: 'pipe' });
+  // Centred on the arena, so the fixture keeps framing the fighting floor
+  // rather than whatever the old centre's coordinates now happen to land on.
+  execFileSync(process.execPath, ['scripts/terrain-preview.js', terrainPath, '800,616,320,240'], { stdio: 'pipe' });
   const terrainPng = decodePng(await readFile(terrainPath));
   assert.deepEqual([terrainPng.width, terrainPng.height], [320, 240]);
   assert.ok(new Set(terrainPng.rgb).size > 3, 'Terrain preview crop is visually empty');
   assert.equal(
     createHash('sha256').update(Uint8Array.from(terrainPng.rgb)).digest('hex'),
-    '1fb8df715516a8147869585e3f952d3527cda8f605b31f9f9bbdd0bb8c02d4b7',
+    '91da14465e18c465b09ecfad3314620ed9df5fc49830f76ca7cd87c82cf99815',
     'Terrain preview pixels changed; inspect intentional art/atmosphere changes before updating this digest',
   );
 
@@ -194,7 +196,7 @@ try {
   const actionFrameDigest = createHash('sha256').update(Uint8Array.from(framePng.rgb)).digest('hex');
   assert.equal(
     actionFrameDigest,
-    '3ee102c2a441fd14bc8690adc0ac27613c2e0c9e9aa064f3c9610d0b76bb9f13',
+    '46b1f0e5406ab2cd7836283cbcd9c39c19dd853a3ca9530c0a25caed17f1391d',
     'Action frame pixels changed; inspect intentional game art changes before updating this digest',
   );
   const idleFramePath = join(temporaryRoot, 'frame-idle.png');
@@ -224,7 +226,7 @@ try {
   const builtRun = await runBuiltGame(moduleMatch[1]);
   assert.equal(
     builtRun.terrainDigest,
-    'c0f92bbe385ac423255ee66a802d585aa5cdb9ecedebf88c86bae27db4a6a244',
+    '0e5618d2a85b56797610cbf00cb6ab415459eed99eb0c51e75be71f3e4f1b5fb',
     'Minified production terrain pixels changed; inspect renderer/data changes before updating this digest',
   );
 

@@ -135,10 +135,10 @@ function bytesToBase64(bytes) {
   return btoa(binary);
 }
 
+const decodeBase64 = encoded => Uint8Array.from(atob(encoded), character => character.charCodeAt(0));
+
 function base64ToBytes(encoded, label) {
-  let binary;
-  try { binary = atob(encoded || ''); } catch { throw Error(`Malformed ${label} base64`); }
-  return Uint8Array.from(binary, character => character.charCodeAt(0));
+  try { return decodeBase64(encoded || ''); } catch { throw Error(`Malformed ${label} base64`); }
 }
 
 function bitAt(mask, index) {
@@ -193,6 +193,54 @@ function decodeTiles(encoded, count, paletteLength, wide) {
   }
   if (!wide && count & 1 && bytes.at(-1) >> 4) throw Error('Terrain tile padding is not empty');
   return ids;
+}
+
+/**
+ * Decode bundled, build-validated data without shipping the editor's defensive
+ * schema errors. This supports the same narrow/wide packed representation; the
+ * only difference is where invalid authored data is rejected.
+ */
+export function unpackGameLevel(source) {
+  const tileWidth = source.width / AUTHOR_TILE;
+  const tileHeight = source.height / AUTHOR_TILE;
+  const count = tileWidth * tileHeight;
+  const palette = source.stacks.map(key => [...key]);
+  const tiles = atob(source.tiles);
+  const tileStacks = Array.from({ length: count }, (_, index) => palette[
+    source.wide ? tiles.charCodeAt(index) : tiles.charCodeAt(index >> 1) >> (index & 1) * 4 & 15
+  ]);
+  const collisionWidth = source.width / MASK_CELL;
+  const collisionHeight = source.height / MASK_CELL;
+  const packedCollision = atob(source.collision);
+  const collision = new Uint8Array(Math.ceil(collisionWidth * collisionHeight / 8));
+  let cursor = 0;
+  let output = 0;
+  const varint = () => {
+    let value = 0;
+    let shift = 0;
+    let byte;
+    do {
+      byte = packedCollision.charCodeAt(cursor++);
+      value |= (byte & 127) << shift;
+      shift += 7;
+    } while (byte & 128);
+    return value;
+  };
+  while (cursor < packedCollision.length) {
+    output += varint();
+    const end = output + varint();
+    while (output < end) collision[output >> 3] |= 1 << (output++ & 7);
+  }
+  return {
+    ...source,
+    spawners: source.spawners || [],
+    tileWidth,
+    tileHeight,
+    collisionWidth,
+    collisionHeight,
+    tileStacks,
+    collision,
+  };
 }
 
 /** Strictly decode the new stack-only level schema. */

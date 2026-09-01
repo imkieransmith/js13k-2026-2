@@ -1,6 +1,6 @@
 import levelSource from './levels/arena.json';
 import { createArena, markSwing, updateArena } from './arena.js';
-import { buildTerrain, drawTerrain, moveOnTerrain, terrainHash as hash, unpackLevel } from './terrain.js';
+import { buildTerrain, drawTerrain, moveOnTerrain, terrainHash as hash, unpackGameLevel } from './terrain.js';
 
 (() => {
 'use strict';
@@ -8,7 +8,7 @@ import { buildTerrain, drawTerrain, moveOnTerrain, terrainHash as hash, unpackLe
 const canvas = document.querySelector('#c');
 const ctx = canvas.getContext('2d');
 const hud = document.querySelector('#hud');
-const level = unpackLevel(levelSource);
+const level = unpackGameLevel(levelSource);
 
 // World units are deliberately independent of screen pixels. Keeping the
 // simulation in one coordinate system means camera zoom and device pixel ratio
@@ -87,6 +87,10 @@ const BASE_ZOOM = 2;
 const FIXED_STEP = 1 / 120;
 const SHAFT_SPACING = 232;
 const MOTE_CELL = 72;
+// How far a ground-plane circle is flattened. The world is drawn from just off
+// vertical, so anything lying on the floor — a gate well, the halo a Construct
+// assembles inside — has to be an ellipse or it reads as standing upright.
+const MOTE_SQUASH = 0.55;
 const SHAFT_SKEW = 0.55;
 
 // One spectrum for every rainbow in the game — mane, tail, dash trail, horn
@@ -756,33 +760,74 @@ function drawShadow(x, y, radius, alpha = 0.22) {
   ctx.globalAlpha = 1;
 }
 
-/** A threshold of prismatic machinery embedded in each ruined gate. */
-function drawSpawner([x, y], index) {
-  const dx = level.player[0] - x;
-  const dy = level.player[1] - y;
-  const distance = Math.hypot(dx, dy) || 1;
-  const sideX = -dy / distance;
-  const sideY = dx / distance;
-  const flash = arena?.flash[index] || 0;
-  const grow = Math.round(flash * 4);
-  const width = 26 + flash * 18;
-  ctx.globalAlpha = 0.22 + flash * 0.7;
-  drawBeam(
-    x - sideX * width / 2, y - sideY * width / 2, sideX, sideY, 0, width,
-    [[7 + grow, DARK_RAINBOW], [5 + grow, RAINBOW], [1 + grow, HOT]],
-    gameTime * 5 + index * 2, 2,
-  );
+/**
+ * A disc lying on the ground, squashed to the shallow tilt the shadows and the
+ * Constructs' haloes are already drawn at. Rows are stepped from a circle
+ * rather than stroked as an arc: everything else on screen is a fillRect, and
+ * one anti-aliased curve among them would be the only soft edge in the game.
+ */
+function drawDisc(x, y, radius, colour) {
+  ctx.fillStyle = colour;
+  const rows = Math.round(radius * MOTE_SQUASH);
+  for (let row = -rows; row <= rows; row++) {
+    const half = Math.round(radius * Math.sqrt(1 - (row / (rows + 0.7)) ** 2));
+    ctx.fillRect(x - half, y + row, half * 2, 1);
+  }
+}
 
-  // Loose pixels contract into the arriving body. They also make activation
-  // visible when the gate's threshold is partly hidden by its own ruin.
-  const radius = 11 + flash * 22;
-  ctx.globalAlpha = 0.18 + flash * 0.75;
-  for (let mote = 0; mote < 6; mote++) {
-    const angle = mote * Math.PI / 3 + gameTime * (index & 1 ? -2 : 2);
-    const moteX = pixelX(x + Math.cos(angle) * radius);
-    const moteY = pixelY(y + Math.sin(angle) * radius * 0.55);
-    ctx.fillStyle = RAINBOW[(mote + index) % RAINBOW.length];
-    ctx.fillRect(moteX - 1, moteY - 1, 3, 3);
+/**
+ * A gate well: the dark energy a Construct is assembled out of, pooled in the
+ * threshold it arrives through.
+ *
+ * Built from the violets a shell leaks and a death poof throws, and round
+ * rather than a bar of light. The rainbow belongs to the llamacorn — it is the
+ * mane, the tail, the dash and the laser — so a rainbow spilling out of the
+ * enemies' door said the door was the player's, and four of them made the
+ * arena's most hostile fixtures its friendliest-looking. Same spectrum discipline as the
+ * player's effects, pointed the other way.
+ */
+function drawSpawner([x, y], index) {
+  const flash = arena?.flash[index] || 0;
+  const screenX = pixelX(x);
+  const screenY = pixelY(y);
+  // Idle breathing, offset per gate. A dormant well still has to look awake
+  // without competing with whichever one is actually delivering an enemy.
+  const pulse = 0.5 + Math.sin(gameTime * 1.7 + index * 2) * 0.5;
+  const radius = 15 + pulse * 1.5 + flash * 9;
+  // Rim, socket, a ring of charge turning inside it, then the eye. The ring is
+  // punched back out with the socket colour rather than stroked, which is the
+  // same trick the Constructs' shells use to get a one-pixel outline: nothing
+  // here is ever an outlined shape, only a smaller shape laid over a larger.
+  drawDisc(screenX, screenY, radius + 2, INK);
+  drawDisc(screenX, screenY, radius, '#213');
+  ctx.globalAlpha = 0.5 + pulse * 0.2 + flash * 0.3;
+  drawDisc(screenX, screenY, radius * 0.88, '#528');
+  ctx.globalAlpha = 1;
+  drawDisc(screenX, screenY, radius * 0.66, '#213');
+  // The eye is the Construct's own core colour, sitting in the ground waiting
+  // to be a Construct. It opens as the gate delivers.
+  ctx.globalAlpha = 0.55 + flash * 0.45;
+  drawDisc(screenX, screenY, radius * (0.26 + pulse * 0.05) + flash * 6, '#84e');
+  ctx.globalAlpha = 0.5 + flash * 0.5;
+  ctx.fillStyle = MAGIC_HOT;
+  ctx.fillRect(screenX - 1, screenY - 1, 3, 2);
+  ctx.globalAlpha = 1;
+
+  // Motes wind inward and are swallowed, so a quiet gate reads as gathering
+  // something rather than as a light left on. An arrival throws the same
+  // spiral outward instead, which is the only cue the player needs.
+  for (let mote = 0; mote < 7; mote++) {
+    const spin = (gameTime * 0.55 + mote / 7) % 1;
+    const reach = (flash ? spin : 1 - spin) * radius * 1.7;
+    const angle = mote * 2.24 + gameTime * (index & 1 ? -1.4 : 1.4);
+    const moteX = pixelX(x + Math.cos(angle) * reach);
+    const moteY = pixelY(y + Math.sin(angle) * reach * MOTE_SQUASH);
+    const size = 1 + (mote & 1);
+    ctx.globalAlpha = Math.sin(spin * Math.PI) * (0.6 + flash * 0.4);
+    ctx.fillStyle = '#213';
+    ctx.fillRect(moteX - 1, moteY - 1, size + 2, size + 2);
+    ctx.fillStyle = mote & 1 ? '#84e' : MAGIC_HOT;
+    ctx.fillRect(moteX, moteY, size, size);
   }
   ctx.globalAlpha = 1;
 }
@@ -1031,17 +1076,23 @@ function drawEnemy(enemy, x, y) {
     const progress = 1 - enemy.birth / 0.45;
     const radius = (1 - progress) * 28;
     ctx.globalAlpha = 0.3 + progress * 0.7;
+    // The same violet the gate well is made of, contracting into the shell it
+    // is about to become. A body assembled out of the player's rainbow and
+    // then immediately swinging at the player was the single most confusing
+    // frame in the encounter.
     for (let mote = 0; mote < 8; mote++) {
       const angle = mote * Math.PI / 4 + enemy.id;
       const moteX = x + Math.cos(angle) * radius;
       const moteY = y + Math.sin(angle) * radius * 0.6;
       const size = 2 + Math.round(progress * 3);
-      ctx.fillStyle = RAINBOW[(mote + enemy.id) % RAINBOW.length];
+      ctx.fillStyle = STONE_INK;
+      ctx.fillRect(moteX - (size >> 1) - 1, moteY - (size >> 1) - 1, size + 2, size + 2);
+      ctx.fillStyle = mote & 1 ? '#528' : '#84e';
       ctx.fillRect(moteX - (size >> 1), moteY - (size >> 1), size, size);
     }
     const core = Math.round(progress * 11);
     if (core) {
-      ctx.fillStyle = HOT;
+      ctx.fillStyle = progress > 0.8 ? MAGIC_HOT : '#84e';
       ctx.fillRect(x - (core >> 1), y - (core >> 1), core, core);
     }
     ctx.globalAlpha = 1;
