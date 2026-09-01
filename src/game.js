@@ -1,6 +1,6 @@
 import levelSource from './levels/arena.json';
 import { createArena, markSwing, updateArena } from './arena.js';
-import { buildTerrain, drawTerrain, moveOnTerrain, terrainHash as hash, unpackGameLevel } from './terrain.js';
+import { buildTerrain, castRay, drawTerrain, isWalkable, moveOnTerrain, terrainHash as hash, unpackGameLevel } from './terrain.js';
 
 (() => {
 'use strict';
@@ -81,6 +81,10 @@ const ENEMY_ATTACK_ARC = Math.PI * 0.58;
 const ENEMY_AGGRO = 210;
 const ENEMY_LEASH = 250;
 const ENEMY_ROAM = 235;
+// How long a Construct commits to walking round an obstruction before it aims
+// at the player again. Long enough to clear a column drum at chase speed, short
+// enough that the detour never reads as losing interest.
+const DETOUR_TIME = 0.7;
 const AIM_DISTANCE = 144;
 const AIM_MARGIN = 9;
 const BASE_ZOOM = 2;
@@ -179,7 +183,7 @@ const makeEnemy = ([x, y, type], id, arena = false) => ({
   windup: 0, attackEffect: 0,
   attackDirectionX: 0, attackDirectionY: 1,
   hurt: 0, hitEffect: 0, death: 0, birth: arena ? 0.45 : 0,
-  laserCooldown: 0, knockX: 0, knockY: 0, swing: -1,
+  laserCooldown: 0, knockX: 0, knockY: 0, swing: -1, detour: 0, veer: 1,
 });
 const makeEnemies = () => ENEMY_SPAWNS.map((spawn, id) => makeEnemy(spawn, id));
 let enemies = makeEnemies();
@@ -410,7 +414,43 @@ function moveEnemy(enemy, targetX, targetY, speed, dt) {
       moveY = enemy.homeY + homeY / homeDistance * ENEMY_ROAM - enemy.y;
     }
   }
-  moveOnTerrain(level, enemy, moveX, moveY, 12);
+  // Returned rather than discarded: which axis the ruin refused is the only
+  // evidence a Construct has that something is in its way, and `chase` needs it.
+  return moveOnTerrain(level, enemy, moveX, moveY, 12);
+}
+
+/**
+ * Pursuit that can get round a column. Steering straight at the player and
+ * letting `moveOnTerrain` slide off whatever it meets is enough for a glancing
+ * contact, but the moment an obstruction sits square between the two the slide
+ * has nowhere to go: the Construct creeps sideways at whatever fraction of its
+ * speed happens to point along the stone, which is the machine grinding dumbly
+ * at a wall that the cover on the fighting floor otherwise creates.
+ *
+ * A refusal on the axis it most wanted therefore commits it to one side for a
+ * moment and it walks the obstruction instead. Only that axis counts: a
+ * refusal on the other one means the slide is already working, and detouring
+ * on every brush against the barrier would have every Construct in the arena
+ * peeling off it.
+ *
+ * The side is probed once, when the detour begins, rather than re-derived per
+ * frame. A Construct that reconsiders every frame oscillates on the spot,
+ * which looks considerably worse than the grinding it replaced.
+ */
+function chase(enemy, speed, dt) {
+  const dx = player.x - enemy.x;
+  const dy = player.y - enemy.y;
+  if (enemy.detour > 0) {
+    enemy.detour -= dt;
+    // Perpendicular with a forward lean, so peeling round cover still closes.
+    moveEnemy(enemy, enemy.x - dy * enemy.veer + dx * 0.45, enemy.y + dx * enemy.veer + dy * 0.45, speed, dt);
+    return;
+  }
+  const refused = moveEnemy(enemy, player.x, player.y, speed, dt);
+  if (!(refused & (Math.abs(dx) > Math.abs(dy) ? 1 : 2))) return;
+  enemy.detour = DETOUR_TIME;
+  const distance = Math.hypot(dx, dy) || 1;
+  enemy.veer = isWalkable(level, enemy.x - dy / distance * 34, enemy.y + dx / distance * 34, 12) ? 1 : -1;
 }
 
 // Health only, and only when it changes. Charge moves continuously while the
@@ -507,7 +547,12 @@ function updateLaser(dt) {
 
   laser.directionX = player.facingX;
   laser.directionY = player.facingY;
-  laser.reach = viewportReach(laser.directionX, laser.directionY, -8);
+  // One clamp serves the drawing and the damage sweep below it, so the beam
+  // can never kill something it visibly did not reach.
+  laser.reach = castRay(
+    level, player.x, player.y, laser.directionX, laser.directionY,
+    viewportReach(laser.directionX, laser.directionY, -8),
+  );
   laser.charge = Math.max(0, laser.charge - dt);
   for (const enemy of enemies) {
     if (!enemy.health || enemy.birth || enemy.laserCooldown) continue;
@@ -620,7 +665,7 @@ function updateEnemies(dt) {
     }
 
     if (!enemy.type) {
-      if (playerDistance > 34) moveEnemy(enemy, player.x, player.y, 68, dt);
+      if (playerDistance > 34) chase(enemy, 68, dt);
       else moveEnemy(enemy, enemy.x, enemy.y, 0, dt);
       if (playerDistance < 45 && !enemy.cooldown) {
         lockEnemyAim(enemy, playerX, playerY, playerDistance);
@@ -628,13 +673,23 @@ function updateEnemies(dt) {
         enemy.cooldown = 1.05;
       }
     } else {
-      if (playerDistance > 190) moveEnemy(enemy, player.x, player.y, 52, dt);
+      // A shrine needs a clear line before it commits to anything. Standing
+      // off and firing into a column was the single behaviour that made the
+      // cover on the floor look like an oversight rather than a feature, and
+      // treating a blocked line as "too far" is what sends it looking for an
+      // angle instead — the same pursuit that gets a walker round the drum.
+      const sighted = playerDistance < 300 && castRay(
+        level, enemy.x, enemy.y,
+        playerX / (playerDistance || 1), playerY / (playerDistance || 1),
+        playerDistance,
+      ) >= playerDistance;
+      if (!sighted || playerDistance > 190) chase(enemy, 52, dt);
       else if (playerDistance < 120) moveEnemy(enemy, enemy.x - playerX, enemy.y - playerY, 62, dt);
       else {
         const side = enemy.id & 1 ? 1 : -1;
         moveEnemy(enemy, enemy.x - playerY * side, enemy.y + playerX * side, 28, dt);
       }
-      if (playerDistance < 280 && !enemy.cooldown) {
+      if (sighted && playerDistance < 280 && !enemy.cooldown) {
         lockEnemyAim(enemy, playerX, playerY, playerDistance);
         enemy.windup = RANGED_WINDUP;
         enemy.cooldown = 1.65;
@@ -653,6 +708,12 @@ function updateProjectiles(dt) {
       damagePlayer(projectile.x - projectile.vx, projectile.y - projectile.vy);
       return false;
     }
+    // Masonry eats the shot. The sight check stops a shrine firing at a wall
+    // it is already looking at; this is what happens when the player ducks
+    // behind one during the telegraph, and it is the better answer than
+    // cancelling the wind-up — a Construct that has committed stays committed,
+    // and stepping behind cover is a dodge the player earned.
+    if (!isWalkable(level, projectile.x, projectile.y)) return false;
     return projectile.life > 0 && projectile.x > 0 && projectile.x < WORLD.width
       && projectile.y > 0 && projectile.y < WORLD.height;
   });
@@ -962,9 +1023,14 @@ function drawEnemyTelegraph(enemy, x, y) {
     // Stepped by one so a one-pixel line comes out continuous, and left fully
     // opaque: translucent stamps compound wherever two overlap, which speckles
     // a line this thin. Intensity is carried by colour instead.
+    // Stopped by the ruin, like the shot it is promising. A telegraph drawn
+    // straight through a column is a threat the level has already answered.
     drawBeam(
       x, y, enemy.attackDirectionX, enemy.attackDirectionY,
-      14, 30 + progress * 270,
+      14, Math.min(
+        30 + progress * 270,
+        castRay(level, x, y, enemy.attackDirectionX, enemy.attackDirectionY, 300),
+      ),
       [[progress > 0.86 ? 3 : 1,
         progress > 0.86 ? '#ffd0da' : progress > 0.5 ? '#e94863' : WARNING]],
       0, 1,

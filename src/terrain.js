@@ -408,6 +408,32 @@ export function isWalkable(level, x, y, radius = 0) {
   return true;
 }
 
+/**
+ * How far a straight line runs before it meets masonry, capped at `reach`.
+ * Sight lines, shots and the rainbow laser all need the same answer and they
+ * have to agree: a Construct that can see the player must be one the player
+ * can shoot back at, and a beam has to stop where a shot aimed down it would
+ * have. Three separate near-misses at this question is how cover stops meaning
+ * anything.
+ *
+ * Sampled a whole Collision cell at a time, which cannot tunnel because the
+ * smallest thing in the level is an authored tile and that is four cells
+ * across. Started one step out, so a body shoved into masonry by knockback
+ * still gets a sight line instead of being blinded by the cell it is standing
+ * in, and the answer is the last clear distance rather than the first blocked
+ * one — a caller drawing to it stops short of the stone, not inside it.
+ */
+export function castRay(level, x, y, dirX, dirY, reach) {
+  for (let travel = MASK_CELL; travel < reach; travel += MASK_CELL) {
+    if (collisionAt(
+      level,
+      Math.floor((x + dirX * travel) / MASK_CELL),
+      Math.floor((y + dirY * travel) / MASK_CELL),
+    )) return travel - MASK_CELL;
+  }
+  return reach;
+}
+
 /** Axis-separated substeps prevent dashes and knockback tunnelling. */
 export function moveOnTerrain(level, body, dx, dy, radius) {
   const steps = Math.max(1, Math.ceil(Math.max(Math.abs(dx), Math.abs(dy)) / (MASK_CELL / 2)));

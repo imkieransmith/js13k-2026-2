@@ -339,6 +339,83 @@ assert.equal(state.player.health, 4, 'Projectile did not damage the player');
 assert.equal(state.projectiles.length, 0, 'Projectile survived player contact');
 checkpoint('enemy-attacks');
 
+// Cover. The column drums on the sand are opaque to both sides: the geometry
+// that stops a body has to stop a sight line, a shot, and the rainbow laser
+// too, or the arena's only cover is decoration. The north-west drum blocks
+// world x 672..736 and — because a Wall's front face is drawn on the tile
+// below it — down to y 640, so a straight line from 704,500 to 704,690 runs
+// through it while both ends stand on open sand.
+const COVER_X = 704;
+const placeAcrossCover = (type, arenaEnemy = false) => {
+  isolate();
+  controls.player.invulnerability = 0;
+  Object.assign(controls.player, { x: COVER_X, y: 690, previousX: COVER_X, previousY: 690 });
+  const spawned = controls.spawnEnemies([[COVER_X, 500, type]], arenaEnemy);
+  return Object.assign(spawned[0], { mode: 1, birth: 0, cooldown: 0 });
+};
+
+// A shrine with no line does not commit to a wind-up, and closes rather than
+// standing off — the answer to a blocked shot is to go and find an angle.
+let covered = placeAcrossCover(1, true);
+step(60);
+assert.equal(covered.windup, 0, 'A shrine started a wind-up through a column drum');
+assert.equal(smoke.state().projectiles.length, 0, 'A shrine fired through a column drum');
+const coveredStart = Math.hypot(covered.x - COVER_X, covered.y - 690);
+step(360);
+assert.ok(
+  Math.hypot(covered.x - COVER_X, covered.y - 690) < coveredStart,
+  'A blocked shrine held its distance instead of looking for an angle',
+);
+
+// The same shrine in the open does commit, which is what proves the check
+// above is reading the level rather than simply never firing.
+isolate();
+controls.player.invulnerability = 0;
+Object.assign(controls.player, { x: COVER_X, y: 690, previousX: COVER_X, previousY: 690 });
+const clear = Object.assign(
+  controls.spawnEnemies([[COVER_X, 500 + 190, 1]], true)[0],
+  { mode: 1, birth: 0, cooldown: 0 },
+);
+step(60);
+assert.ok(clear.windup > 0, 'A shrine with a clear line never committed');
+
+// A shot already in flight is eaten by the stone, so ducking behind cover
+// during a telegraph is a real dodge rather than a cosmetic one.
+covered = placeAcrossCover(1, true);
+Object.assign(covered, { windup: 0.001, attackDirectionX: 0, attackDirectionY: 1 });
+smoke.update(0.01);
+assert.equal(smoke.state().projectiles.length, 1, 'Committed ranged wind-up emitted no projectile');
+step(120);
+assert.equal(smoke.state().projectiles.length, 0, 'A projectile passed through a column drum');
+assert.equal(controls.player.health, 5, 'A projectile damaged the player through a column drum');
+
+// The rainbow laser stops at the stone as well, and one clamp covers both the
+// beam that is drawn and the sweep that deals its damage.
+covered = placeAcrossCover(0, true);
+// Aim is re-derived from the pointer every step when the mouse has been seen,
+// so facing has to be set through the pointer rather than written directly.
+controls.pointer.seen = false;
+Object.assign(controls.player, { facingX: 0, facingY: -1 });
+controls.laser.held = true;
+controls.laser.charge = 5;
+smoke.update(1 / 120);
+assert.ok(controls.laser.active, 'Laser did not fire');
+assert.ok(controls.laser.reach < 60, `Laser ran ${controls.laser.reach} units into a column drum`);
+step(120);
+assert.equal(covered.health, 3, 'The laser killed a Construct through a column drum');
+controls.laser.held = false;
+
+// A walker with a drum square between it and the player gets round it. The
+// old straight-line slide deadlocked here: both axes refused at once and the
+// machine ground at the stone for as long as the player stood still.
+covered = placeAcrossCover(0, true);
+step(720);
+assert.ok(
+  Math.hypot(covered.x - COVER_X, covered.y - 690) < 60,
+  `A walker stalled ${Math.round(Math.hypot(covered.x - COVER_X, covered.y - 690))} units short of the player`,
+);
+checkpoint('cover');
+
 // Authored enemies disengage outside their home leash, unlike arena enemies.
 isolate();
 enemy = controls.spawnEnemies([[controls.player.x, controls.player.y, 0]])[0];
@@ -405,7 +482,7 @@ for (const [name, ...args] of calls) for (const value of args) if (typeof value 
 }
 const stateDigest = createHash('sha256').update(JSON.stringify(stateTrace)).digest('hex');
 const renderDigest = renderTrace.copy().digest('hex');
-assert.equal(stateDigest, 'd64594b6b3a7da707079f613c44556e0dcd82728d6d6583401e3d29eb78e4eec', 'Gameplay characterisation changed; inspect mechanics before updating this digest');
-assert.equal(renderDigest, '75d185ef7d12760b77539d446af7c8eed01d5965a496cc02530e6ca8dd279f16', 'Ordered render commands changed; inspect intentional visuals before updating this digest');
+assert.equal(stateDigest, '3756a2f3169c20ccd0c477c11c5ce73ace458eb03f19d96a9859476dcc1474e6', 'Gameplay characterisation changed; inspect mechanics before updating this digest');
+assert.equal(renderDigest, 'd2dbc4652b200b23ecf55d295c9b3241411496a04749f689bf1639026dcd9ee0', 'Ordered render commands changed; inspect intentional visuals before updating this digest');
 
 console.log(`game smoke passed (${frameCount} frames, ${calls.length} draw calls, terrain bake ${bakeMs}ms)`);
