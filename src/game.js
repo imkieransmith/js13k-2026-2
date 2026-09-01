@@ -167,6 +167,7 @@ const player = {
   hurtGlow: 0,
   tuck: 0,
   walk: 0,
+  footfall: 0,
 };
 
 const camera = { x: player.x, y: player.y, previousX: player.x, previousY: player.y };
@@ -202,6 +203,269 @@ let resetQueued = false;
 let gameTime = 0;
 let shake = 0;
 let hudHealth = -1;
+
+// Sound is a handful of oscillators and nothing else — no samples, no library,
+// no file, and so no bytes spent on any of those. Every effect is a list of
+// [frequency, delay, length, volume, endFrequency, wave] rows, which is enough
+// for a horn swinging, stone cracking and a beam igniting at a few dozen bytes
+// apiece. Ported from the audio in "The Rainbow Is Right There", our own
+// earlier entry, so the rights are ours and nothing external ships.
+// Wave 4 is not an oscillator shape but white noise through a band-pass, and
+// it is what most of these are built on. An oscillator can only ever make a
+// pitch, and almost nothing in this game is a pitch: a horn cutting air is
+// broadband and tuneless, so is stone chipping, and so is stone coming apart.
+// Written as pitches they all came out as the same falling blip, which is why
+// they used to blur into each other.
+const WAVES = ['sine', 'square', 'sawtooth', 'triangle'];
+// How narrow the band-pass is. Lower is more of an open hiss, higher is more
+// of a whistle; around here it keeps enough body to read as a physical thing.
+const NOISE_Q = .7;
+// A seventh field, the attack, is what lets a sound swell instead of only be
+// struck. Everything else here begins the instant it is triggered because
+// everything else is an impact; a horn swinging is the one thing that is not.
+const SOUNDS = {
+  // A horn swung through air, in the shape the arc actually has: it winds up,
+  // it passes, it is gone. The band rises while the horn accelerates and falls
+  // away behind it, and the swell is the whole difference between a swing and
+  // a hit — struck from silence, the same noise reads as an impact instead.
+  // Sat an octave higher it also went tinny: up there the band is all
+  // sibilance and no horn, and a horn has mass. It has to be finished inside
+  // ATTACK_COOLDOWN, or a player holding the button stacks swings on itself.
+  swing: [
+    [560, 0, .11, .06, 1400, 4, .075],
+    [1400, .06, .13, .16, 300, 4, .03],
+    [300, .01, .12, .045, 110, 3, .045],
+  ],
+  // Struck stone is two events a few milliseconds apart — the chip off the
+  // surface, then the mass behind it refusing to move.
+  hit: [[1800, 0, .07, .26, 420, 4], [150, 0, .13, .11, 58, 3]],
+  // A Construct is rubble held together by dark magic, so breaking one is not
+  // one event: the mass drops, the magic gets out, and then the pieces land
+  // separately. Four noise bursts on closing intervals are those pieces —
+  // one long decay in their place read as a collapse rather than a clatter.
+  kill: [
+    [110, 0, .28, .14, 36, 3], [520, .03, .18, .05, 70, 2],
+    [1500, 0, .07, .26, 320, 4], [900, .05, .1, .17, 190, 4],
+    [620, .12, .12, .115, 130, 4], [430, .21, .15, .065, 95, 4],
+  ],
+  // Dark magic landing on something alive. Deliberately not a chord: a
+  // consonant pair read as an interface beep and a dissonant pair read as a
+  // synth alarm, and both are audibly a musical decision, which is the whole
+  // of why they sounded artificial. Nothing here is a recognisable interval.
+  //
+  // It is noise-led with the tone underneath, because a body taking a hit is
+  // mostly noise, and every voice is dull or dulls fast: sawtooth holds its
+  // full harmonic spectrum however long it rings, which no physical thing
+  // does, so the loud parts are noise and triangles and the tail is quiet.
+  // The band sits well below the bright chip `hit` uses, so being hurt never
+  // sounds like hurting something else, and the mid band that swells rather
+  // than strikes is a breath being knocked out — the only living thing here.
+  hurt: [
+    [540, 0, .16, .2, 130, 4, .011],
+    [150, 0, .17, .15, 58, 3, .012],
+    [780, .025, .12, .07, 420, 4, .04],
+    [88, .02, .24, .045, 42, 3, .05],
+  ],
+  // Ignition climbs into the pitch the hold then sustains, so the two are one
+  // sound rather than a noise followed by a tone.
+  beam: [[87, 0, .34, .034, 348, 2], [400, 0, .22, .045, 1900, 4]],
+  // Magic thrown, and magic landing: the same voice an octave and a half
+  // apart, one leaving with force and one arriving without any.
+  shot: [[300, 0, .18, .04, 90, 2], [1300, 0, .07, .06, 260, 4]],
+  pop: [[260, 0, .11, .04, 70, 3], [800, 0, .09, .06, 130, 4]],
+  // Llamas walk on pads, not hooves — the legs are drawn for it too — so this
+  // is a soft weight landing on sand with a scuff of grit over it rather than
+  // a clack. It plays about five times a second at a trot, so it sits under
+  // everything else, and both halves are noise on purpose: the shared buffer
+  // is read from a random offset every time, and that is the whole of what
+  // stops five identical clomps a second from sounding like a machine.
+  hoof: [[260, 0, .1, .21, 75, 4, .011], [560, 0, .05, .05, 200, 4, .009]],
+  // Dashing is the llamacorn's own magic, so it is built out of the beam's
+  // palette rather than its own: sawtooths, a perfect fifth, and upward
+  // motion. The pitches are literally the beam's — it pushes off from 87, the
+  // note the beam ignites on, and the climbing pair is 174 and 261, the two
+  // the beam holds. Where the beam sustains that fifth, the dash carries it
+  // up an octave and a fifth and is gone, which is the difference between
+  // channelling the magic and spending it.
+  //
+  // The air rising rather than falling is also the whole of what separates
+  // this from a horn swing: that one darkens as it passes, this one brightens
+  // as the animal gets away. It has to finish inside DASH_COOLDOWN, or dashes
+  // stack on each other.
+  // Built on the beam's own ignition figure — a sawtooth climbing 87 to 348 —
+  // with the fifth it holds stacked over the top and a short hiss leaving.
+  //
+  // That low voice is not decoration, it is the fix for this sounding like a
+  // paper bag. A bag is dry mid-band with no floor under it, and that is what
+  // was left when the only low element here died after 120ms at 44Hz, a pitch
+  // half the speakers in the world cannot reproduce, while everything else
+  // climbed away out of the middle. The beam never has that problem because
+  // its ignition holds 87 the whole way through. The air is brief and starts
+  // above the worst of that band rather than sweeping along inside it.
+  dash: [
+    [87, 0, .24, .05, 348, 3, .01],
+    [174, .01, .2, .07, 587, 3, .06],
+    [261, .01, .17, .07, 880, 3, .07],
+    [800, 0, .09, .04, 1800, 4, .02],
+  ],
+};
+let audio, audioOut, noise;
+const soundTimes = {};
+
+/**
+ * Browsers refuse to start audio until the page has been interacted with, and
+ * which gesture counts differs between them, so this retries from all of them
+ * and from a tab becoming visible again. The one-frame silent buffer is what
+ * actually unlocks iOS, where resuming the context alone is not enough.
+ */
+function startAudio() {
+  try {
+    if (!audio) {
+      audio = new AudioContext();
+      audioOut = audio.createGain();
+      audioOut.connect(audio.destination);
+      // One second of white noise, made once and shared by every effect that
+      // needs air or grit. A second is long enough that a random start offset
+      // makes repeated hits genuinely different from one another.
+      noise = audio.createBuffer(1, audio.sampleRate, audio.sampleRate);
+      const grain = noise.getChannelData(0);
+      for (let index = 0; index < grain.length; index++) grain[index] = Math.random() * 2 - 1;
+    }
+    if (audio.state !== 'running') {
+      const silence = audio.createBufferSource();
+      silence.buffer = audio.createBuffer(1, 1, 22050);
+      silence.connect(audioOut);
+      silence.start();
+      audio.resume().catch(() => {});
+    }
+  } catch { audio = null; }
+}
+
+/**
+ * One voice with a plucked envelope. Either an oscillator sliding in pitch or,
+ * for wave 4, noise sliding a band-pass across itself — the same two numbers
+ * mean the same thing to both, so the table reads the same either way.
+ */
+function playNote(frequency, start, duration, volume, wave, end, attack) {
+  const gain = audio.createGain();
+  let source, input = gain;
+  if (wave > 3) {
+    source = audio.createBufferSource();
+    source.buffer = noise;
+    // Looped so a long effect cannot run off the end of the second we made.
+    source.loop = 1;
+    input = audio.createBiquadFilter();
+    input.type = 'bandpass';
+    input.Q.setValueAtTime(NOISE_Q, start);
+    input.frequency.setValueAtTime(frequency, start);
+    input.frequency.exponentialRampToValueAtTime(end, start + duration);
+    input.connect(gain);
+  } else {
+    source = audio.createOscillator();
+    source.type = WAVES[wave];
+    source.frequency.setValueAtTime(frequency, start);
+    if (end !== frequency) source.frequency.exponentialRampToValueAtTime(end, start + duration);
+  }
+  gain.gain.setValueAtTime(.0001, start);
+  gain.gain.linearRampToValueAtTime(volume, start + attack);
+  gain.gain.exponentialRampToValueAtTime(.001, start + duration);
+  gain.connect(audioOut);
+  source.connect(input);
+  // Oscillators ignore the second argument; noise takes it as a start offset,
+  // so no two swings are cut from the same piece of the buffer.
+  source.start(start, Math.random());
+  source.stop(start + duration);
+}
+
+// The beam is held rather than struck, so it cannot be a plucked note: it
+// needs oscillators that outlive the frame that started them.
+//
+// Two sawtooths a fifth apart, driven through one resonant low-pass whose
+// cutoff a slow oscillator sweeps up and down. Detuning the pair by a few
+// hertz was the first attempt and it is what made this sound like static: a
+// sawtooth is every harmonic at once, so a three-hertz detune beats at three
+// hertz on the fundamental, six on the second harmonic and sixty by the
+// twentieth, and a stack of beat rates that high is the textbook definition of
+// buzz. Detuning only works on waves poor enough in harmonics to have nothing
+// up there to beat.
+//
+// Tuning them to an interval instead gives the beam a chord rather than a
+// pitch, the filter throws away the harsh top and leaves the body, and the
+// sweep is what stops a held note reading as an electrical fault: nothing in
+// nature sustains a pitch that never moves, so a static tone always sounds
+// like equipment rather than like something being channelled.
+const BEAM = [[174, 2], [261, 2]];
+// A third of what a struck sound peaks at. Levels were the other half of why
+// this read as feedback: sustained energy is perceived as far louder than the
+// same energy in something that decays, so a hold matched to the hits by the
+// numbers sits well above them by ear, and a loud unchanging tone is what a
+// blown speaker sounds like.
+const BEAM_LEVEL = .0105;
+// The three dials worth turning by ear, in order: how bright the beam is, how
+// far the sweep travels either side of that, and how fast it travels.
+const BEAM_CUTOFF = 1100;
+const BEAM_SWEEP = 700;
+const BEAM_RATE = 3;
+let beamVoice = null;
+
+/** Start or release the sustained beam. Idempotent, so callers need not track it. */
+function setBeam(on) {
+  // Both sides negated, not compared directly: callers pass 0 and 1, and
+  // `0 === false` is false, so a direct comparison lets a release through to
+  // a voice that is not there.
+  if (!audio || audio.state !== 'running' || !on === !beamVoice) return;
+  const now = audio.currentTime;
+  if (!on) {
+    const [gain, ...voices] = beamVoice;
+    beamVoice = null;
+    gain.gain.cancelScheduledValues(now);
+    gain.gain.setValueAtTime(BEAM_LEVEL, now);
+    gain.gain.exponentialRampToValueAtTime(.0001, now + .09);
+    for (const oscillator of voices) oscillator.stop(now + .1);
+    return;
+  }
+  const gain = audio.createGain();
+  gain.gain.setValueAtTime(.0001, now);
+  gain.gain.exponentialRampToValueAtTime(BEAM_LEVEL, now + .05);
+  gain.connect(audioOut);
+  const filter = audio.createBiquadFilter();
+  filter.frequency.setValueAtTime(BEAM_CUTOFF, now);
+  filter.Q.setValueAtTime(3, now);
+  filter.connect(gain);
+  // An oscillator driving the filter's cutoff rather than the speakers. Its
+  // own frequency is the sweep rate and the gain it passes through is the
+  // sweep depth, which is the whole of the modulation this needs.
+  const sweep = audio.createOscillator();
+  const depth = audio.createGain();
+  sweep.frequency.setValueAtTime(BEAM_RATE, now);
+  depth.gain.setValueAtTime(BEAM_SWEEP, now);
+  sweep.connect(depth).connect(filter.frequency);
+  sweep.start(now);
+  beamVoice = [gain, sweep];
+  for (const [frequency, wave] of BEAM) {
+    const oscillator = audio.createOscillator();
+    oscillator.type = WAVES[wave];
+    oscillator.frequency.setValueAtTime(frequency, now);
+    oscillator.connect(filter);
+    oscillator.start(now);
+    beamVoice.push(oscillator);
+  }
+}
+
+/**
+ * Throttled per effect. Ten Constructs can land on the same frame and the
+ * arena kills several at once under the beam; without this the identical
+ * oscillators stack into one loud click instead of one sound.
+ */
+function playSound(name) {
+  if (!audio || audio.state !== 'running') return;
+  const now = audio.currentTime;
+  if (now - (soundTimes[name] ?? -1) < .04) return;
+  soundTimes[name] = now;
+  for (const [frequency, offset, duration, volume, end = frequency, wave = 0, attack = .004] of SOUNDS[name]) {
+    playNote(frequency, now + offset, duration, volume, wave, end, attack);
+  }
+}
 
 const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
 // Dynamic sprites are snapped after the camera transform. Rounding them in
@@ -272,6 +536,7 @@ function beginDash(input) {
   player.dashCooldown = DASH_COOLDOWN;
   player.trailClock = 0;
   dashBuffer = 0;
+  playSound('dash');
 }
 
 function updatePlayer(dt) {
@@ -332,6 +597,14 @@ function updatePlayer(dt) {
   // this instead lets the cycle settle out of whatever pose it was caught in.
   const striding = Math.hypot(player.vx, player.vy) > 12 && !player.dashTime;
   player.walk += ((striding ? 1 : 0) - player.walk) * Math.min(1, dt * 12);
+  // A pad lands each time the barrel drops onto a diagonal pair, which is
+  // twice a stride and exactly the phase the bob is drawn from. Reading the
+  // sound off the same distance the animation reads means the two cannot come
+  // apart: a timer would slide out of step the moment the llamacorn changed
+  // pace, and the whole reason the gait runs on distance is that it does not.
+  const footfall = player.step * 0.1 / Math.PI | 0;
+  if (striding && footfall !== player.footfall) playSound('hoof');
+  player.footfall = footfall;
 
   for (const trail of trails) trail.life -= dt;
   while (trails[0] && trails[0].life <= 0) trails.shift();
@@ -348,6 +621,7 @@ function updateAttack(dt) {
   attack.directionX = player.facingX;
   attack.directionY = player.facingY;
   attack.time = ATTACK_DURATION;
+  playSound('swing');
   attack.cooldown = ATTACK_COOLDOWN;
   attack.swing++;
   attackBuffer = 0;
@@ -473,6 +747,7 @@ function damagePlayer(sourceX, sourceY) {
   player.vx = dx / distance * 180;
   player.vy = dy / distance * 180;
   player.health--;
+  playSound('hurt');
   player.invulnerability = 0.7;
   player.hitEffect = 0.18;
   shake = Math.max(shake, SHAKE_HURT);
@@ -482,6 +757,7 @@ function damagePlayer(sourceX, sourceY) {
 }
 
 function spawnProjectile(enemy) {
+  playSound('shot');
   projectiles.push({
     x: enemy.x, y: enemy.y, previousX: enemy.x, previousY: enemy.y,
     vx: enemy.attackDirectionX * 190, vy: enemy.attackDirectionY * 190, life: 3, burst: 0,
@@ -490,6 +766,7 @@ function spawnProjectile(enemy) {
 
 function hurtEnemy(enemy, knockX, knockY) {
   enemy.health--;
+  playSound(enemy.health ? 'hit' : 'kill');
   enemy.hurt = ENEMY_HURT_FLASH;
   enemy.hitEffect = 0.16;
   enemy.knockX = knockX;
@@ -536,7 +813,10 @@ function updateLaser(dt) {
   for (const enemy of enemies) enemy.laserCooldown = Math.max(0, enemy.laserCooldown - dt);
   const wasActive = laser.active;
   laser.active = laser.held && laser.charge > 0;
-  if (!laser.active) return;
+  if (!laser.active) {
+    setBeam(0);
+    return;
+  }
   // A kick when it lights, then a floor it will not decay below for as long as
   // the trigger is held: the ignition rings out and lands in a rumble rather
   // than in silence. Clamping a floor rather than adding to the shake is what
@@ -544,6 +824,11 @@ function updateLaser(dt) {
   // of stacking on top of it — and it leaves everything louder than the floor
   // still able to punch through, which is why the floor sits well under a hit.
   if (!wasActive) {
+    // The ignition transient and the sustain are separate on purpose: a beam
+    // that only fades in has no moment of arrival, and one that only cracks
+    // has nothing holding the frame together while the trigger is down.
+    playSound('beam');
+    setBeam(1);
     shake = Math.max(shake, SHAKE_LASER);
     laser.punch = PUNCH_TIME;
   }
@@ -754,6 +1039,7 @@ function updateEnemies(dt) {
  * the render does not interpolate the burst away from the impact.
  */
 function burstProjectile(projectile, dt) {
+  playSound('pop');
   projectile.x -= projectile.vx * dt;
   projectile.y -= projectile.vy * dt;
   projectile.previousX = projectile.x;
@@ -800,6 +1086,7 @@ function resetEncounter() {
   player.invulnerability = 0.8;
   player.hitEffect = 0;
   player.dashTime = player.dashCooldown = player.tuck = player.walk = player.step = 0;
+  player.footfall = 0;
   player.trailClock = 0;
   attack.time = attack.cooldown = attack.swing = 0;
   laser.charge = DEBUG_START_CHARGE;
@@ -2184,9 +2471,17 @@ canvas.addEventListener('contextmenu', event => event.preventDefault());
 addEventListener('blur', () => {
   held.clear();
   laser.held = false;
+  // Released here as well as in the update: losing the window stops the frame
+  // loop, and a beam only released by the next update would drone on in a
+  // background tab for as long as the player was away from it.
+  setBeam(0);
 });
 addEventListener('resize', resize);
 if (typeof ResizeObserver !== 'undefined') new ResizeObserver(resize).observe(canvas);
+
+startAudio();
+for (const event of ['pointerdown', 'keydown', 'touchstart']) addEventListener(event, startAudio, { passive: true });
+addEventListener('visibilitychange', startAudio);
 
 resize();
 updateHud();

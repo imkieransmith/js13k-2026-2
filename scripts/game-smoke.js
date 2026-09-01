@@ -173,6 +173,63 @@ globalThis.ResizeObserver = class { observe() {} };
 globalThis.btoa = value => Buffer.from(value, 'binary').toString('base64');
 globalThis.atob = value => Buffer.from(value, 'base64').toString('binary');
 
+// Just enough Web Audio for the shipped sound engine to run against, and a log
+// of every note it asks for. Deliberately starts suspended, because that is
+// what a real browser does until the page has been interacted with, and half
+// the value of this stub is proving the game stays silent until then.
+const notes = [];
+let audioGestured = false;
+let audioState = 'suspended';
+const audioParam = () => ({
+  setValueAtTime() {}, linearRampToValueAtTime() {}, exponentialRampToValueAtTime() {},
+  cancelScheduledValues() {},
+});
+globalThis.AudioContext = class {
+  constructor() {
+    this.destination = {};
+    audioState = 'suspended';
+  }
+
+  get state() { return audioState; }
+  get currentTime() { return now / 1000; }
+  get sampleRate() { return 44100; }
+  createGain() { return { gain: audioParam(), connect: target => target }; }
+  createBuffer(channels, length) { return { getChannelData: () => new Float32Array(length) }; }
+  createBiquadFilter() {
+    return { type: '', frequency: audioParam(), Q: audioParam(), connect: target => target };
+  }
+
+  createBufferSource() {
+    // Noise voices are real sounds and belong in the log beside the
+    // oscillators, but the one-frame silent buffer that unlocks iOS is not
+    // one. Looping is what separates them: only the noise buffer does.
+    const voice = { frequency: 0, wave: 'noise', stopped: false, loop: false, at: now };
+    return {
+      buffer: null,
+      set loop(value) { voice.loop = value; },
+      connect: target => target,
+      start() { if (voice.loop) notes.push(voice); },
+      stop() { voice.stopped = true; },
+    };
+  }
+  // Only a gesture unlocks it, as in a browser. Leaving it locked for the
+  // rest of the suite is deliberate: sound then perturbs nothing else here.
+  resume() { if (audioGestured) audioState = 'running'; return Promise.resolve(); }
+
+  createOscillator() {
+    // `stopped` is what separates a note from a held voice: a plucked sound
+    // schedules its own end the moment it starts, and the beam does not.
+    const note = { frequency: 0, wave: '', stopped: false, at: now };
+    return {
+      set type(value) { note.wave = value; },
+      frequency: { ...audioParam(), setValueAtTime(value) { note.frequency = value; } },
+      connect: target => target,
+      start() { notes.push(note); },
+      stop() { note.stopped = true; },
+    };
+  }
+};
+
 const started = Date.now();
 await import('../src/game.js');
 const bakeMs = Date.now() - started;
@@ -439,8 +496,8 @@ assert.ok(
 checkpoint('cover');
 
 // A Construct's shot has to be visibly the Constructs' magic. The rainbow is
-// the llamacorn's — it is her mane, her tail, her dash trail and her laser —
-// so a bolt drawn in any of those bands reads at a glance as something she
+// the llamacorn's — its mane, its tail, its dash trail and its laser — so a
+// bolt drawn in any of those bands reads at a glance as something the player
 // fired, which is the one thing a projectile the player has to dodge must
 // never do. The bolt was gold and white before the arena had any violet
 // vocabulary to belong to; this is what stops it drifting back.
@@ -563,6 +620,101 @@ assert.ok(!controls.projectiles().includes(onBeam), 'The bolt riding the beam ne
 assert.ok(!controls.projectiles().includes(onAxis), 'The intercepted bolt never left');
 checkpoint('laser-intercept');
 
+// Sound. The engine is a handful of oscillators with no samples behind them,
+// so what is worth pinning is the wiring rather than the tuning: nothing heard
+// before the browser has allowed it, every event actually reaching the mixer,
+// and a burst of identical events collapsing into one sound instead of a stack
+// of them. Frequencies are left alone on purpose — those exist to be retuned
+// by ear, and a test that breaks every time someone does is one that gets
+// deleted rather than maintained.
+isolate();
+aimRight();
+// Clear of the throttle window before checking for silence, or the throttle
+// is what proves silent and the browser-permission guard is never exercised.
+now += 500;
+notes.length = 0;
+canvas.dispatch('pointerdown', { button: 0, clientX: 900, clientY: 270 });
+step(4);
+assert.equal(notes.length, 0, 'The game made noise before the browser allowed audio to start');
+
+// Any gesture unlocks it; the game retries from all of them.
+audioGestured = true;
+dispatchGlobal('keydown', { code: 'KeyW' });
+controls.held.clear();
+
+// The throttle is measured against the audio clock, which only moves inside
+// runFrames — so a case wanting two of the same sound has to move it by hand.
+const swingFor = enemyHealth => {
+  isolate();
+  aimRight();
+  if (enemyHealth) {
+    Object.assign(
+      controls.spawnEnemies([[controls.player.x + 40, controls.player.y, 0]])[0],
+      { mode: 1, birth: 0, health: enemyHealth },
+    );
+  }
+  now += 500;
+  notes.length = 0;
+  canvas.dispatch('pointerdown', { button: 0, clientX: 900, clientY: 270 });
+  step(4);
+  // Texture as well as pitch: several of these are noise rather than a note,
+  // and two effects built from different materials should not compare equal.
+  return notes.map(note => [note.wave, note.frequency]);
+};
+
+const swingOnly = swingFor(0);
+assert.ok(swingOnly.length, 'A horn swing was silent');
+// Most of these effects are noise rather than pitch, because a horn cutting
+// air and stone breaking are both tuneless. That path has its own wiring — a
+// shared buffer, a band-pass, a looping source — and none of it is exercised
+// by the oscillators, so it is asserted rather than assumed.
+assert.ok(swingOnly.some(([wave]) => wave === 'noise'), 'The horn swing moves no air');
+const glancing = swingFor(3);
+assert.ok(glancing.length > swingOnly.length, 'Landing a hit added no sound of its own');
+const fatal = swingFor(1);
+assert.notDeepEqual(fatal, glancing, 'A Construct breaking apart sounds exactly like a glancing hit');
+
+isolate();
+controls.player.invulnerability = 0;
+now += 500;
+notes.length = 0;
+smoke.damagePlayer(controls.player.x - 1, controls.player.y);
+const oneHurt = notes.length;
+assert.ok(oneHurt, 'Taking damage was silent');
+
+// Constructs land on the same frame and the beam kills several at once, so
+// two of one sound inside the window have to collapse to one. The clock is
+// deliberately not advanced here — that is what puts them inside it.
+controls.player.invulnerability = 0;
+smoke.damagePlayer(controls.player.x - 1, controls.player.y);
+assert.equal(notes.length, oneHurt, 'Two hits inside the throttle window stacked two sounds');
+
+// The beam is the one sound that is held rather than struck, so it has its own
+// failure mode: started once per frame instead of once per trigger pull, it
+// stacks a new set of oscillators sixty times a second and turns into a wall
+// of noise that never stops. What matters is that holding the trigger adds
+// nothing after the first frame, and that letting go actually releases it.
+isolate();
+aimRight();
+now += 500;
+notes.length = 0;
+controls.laser.charge = 5;
+canvas.dispatch('pointerdown', { button: 2, clientX: 900, clientY: 270 });
+smoke.update(1 / 120);
+const ignition = notes.length;
+assert.ok(ignition, 'Firing the laser was silent');
+const held = notes.filter(note => !note.stopped);
+assert.ok(held.length, 'The beam scheduled its own end instead of sustaining');
+step(90);
+assert.equal(notes.length, ignition, 'Holding the beam started a fresh set of oscillators every frame');
+
+controls.laser.held = false;
+smoke.update(1 / 120);
+assert.ok(held.every(note => note.stopped), 'Releasing the trigger left the beam running');
+
+checkpoint('sound');
+
+
 // Authored enemies disengage outside their home leash, unlike arena enemies.
 isolate();
 enemy = controls.spawnEnemies([[controls.player.x, controls.player.y, 0]])[0];
@@ -629,7 +781,43 @@ for (const [name, ...args] of calls) for (const value of args) if (typeof value 
 }
 const stateDigest = createHash('sha256').update(JSON.stringify(stateTrace)).digest('hex');
 const renderDigest = renderTrace.copy().digest('hex');
-assert.equal(stateDigest, '4b3cd56fd0910404c8e3a78470466fe296cb4e17f735e74f092876aab0edf0a9', 'Gameplay characterisation changed; inspect mechanics before updating this digest');
-assert.equal(renderDigest, 'ae76ff7c070cf435d0af158b8800cec93d4e256c461fce66fc2c4e14093ac777', 'Ordered render commands changed; inspect intentional visuals before updating this digest');
+assert.equal(stateDigest, '34dda25380806623719a9bee255ab28423eead5bc43d55ee95e012a13181479c', 'Gameplay characterisation changed; inspect mechanics before updating this digest');
+assert.equal(renderDigest, '4cc1c5d940b66f543420265d4d63e03da91f76b5068958dec0c013f0f8957b39', 'Ordered render commands changed; inspect intentional visuals before updating this digest');
+
+// Footfalls hang off the gait, and the gait is driven by distance travelled
+// rather than by the clock — which is what keeps the sound on the animation
+// at every speed. Read off the wrong thing it has two failure modes and both
+// are bad: firing once a frame, which is a machine rather than an animal, or
+// never firing at all. Every row of one effect starts on the same frame, so
+// counting distinct start times counts triggers however many rows a recipe
+// grows. This has to run the real frame loop rather than `step`, which does
+// not advance the clock — with a frozen clock the throttle swallows every
+// footfall after the first and the count is always one.
+isolate();
+now += 500;
+notes.length = 0;
+controls.held.add('KeyD');
+runFrames(72);
+const footfalls = new Set(notes.map(note => note.at)).size;
+assert.ok(footfalls > 2 && footfalls < 9, `1.2s of trotting made ${footfalls} footfalls`);
+
+// And a llamacorn standing still is silent. Two separate things already
+// guarantee that — the gate on striding, and a phase that only advances with
+// the ground — so this catches nothing on its own today and is a guard
+// against both being loosened at once, not a proof that either works.
+controls.held.clear();
+runFrames(30);
+notes.length = 0;
+runFrames(72);
+assert.equal(notes.length, 0, 'A llamacorn standing still went on making footsteps');
+
+// A dash is its own sound, and it is the one movement effect that is not the
+// ground: it has to fire on the launch itself rather than on anything the
+// gait does, so a dash from a standstill still makes it.
+notes.length = 0;
+assert.ok(dispatchGlobal('keydown', { code: 'Space', repeat: false }));
+runFrames(2);
+dispatchGlobal('keyup', { code: 'Space' });
+assert.ok(notes.length, 'Dashing was silent');
 
 console.log(`game smoke passed (${frameCount} frames, ${calls.length} draw calls, terrain bake ${bakeMs}ms)`);
