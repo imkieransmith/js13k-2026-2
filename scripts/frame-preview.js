@@ -15,15 +15,28 @@ registerHooks({
       shortCircuit: true,
       source: `export default ${readFileSync(new URL(url), 'utf8')}`,
     };
-    // `dead=id` and `shake=n` expose transient rendering states without a
-    // debug branch in the shipped game.
-    if (url.endsWith('/game.js') && (options.dead !== undefined || options.shake)) {
+    // `dead=id`, `shake=n` and `shot=n` expose transient rendering states
+    // without a debug branch in the shipped game. A shot in particular is
+    // otherwise only reachable by simulating the six hundred-odd frames it
+    // takes a Construct to walk into range and choose to fire.
+    if (url.endsWith('/game.js') && (options.dead !== undefined || options.shake || options.shot)) {
       let source = readFileSync(new URL(url), 'utf8');
       if (options.dead !== undefined) source = source.replace(
         'let enemies = makeEnemies();',
         `let enemies = makeEnemies(); enemies[${Number(options.dead)}].health = 0; enemies[${Number(options.dead)}].death = CONSTRUCT_DEATH;`,
       );
       if (options.shake) source = source.replace('let shake = 0;', `let shake = ${Number(options.shake)};`);
+      // `shot=dx,dy[,vx,vy]` places a bolt relative to the player and gives it
+      // a velocity, so a flyby, a hit on the player and a hit on a column drum
+      // are all one frame count away instead of six hundred.
+      if (options.shot) {
+        const [dx, dy = 0, vx = 190, vy = 0] = options.shot.split(',').map(Number);
+        source = source.replace('let projectiles = [];', `let projectiles = [{
+          x: player.x + ${dx}, y: player.y + ${dy},
+          previousX: player.x + ${dx}, previousY: player.y + ${dy},
+          vx: ${vx}, vy: ${vy}, life: 3, burst: 0,
+        }];`);
+      }
       return { format: 'module', shortCircuit: true, source };
     }
     return nextLoad(url, context);

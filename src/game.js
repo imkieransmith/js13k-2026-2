@@ -76,6 +76,10 @@ const RANGED_WINDUP = 0.62;
 const ENEMY_ATTACK_EFFECT = 0.16;
 const ENEMY_HURT_FLASH = 0.45;
 const CONSTRUCT_DEATH = 0.92;
+// How long a bolt spends coming apart. Short: this is the punctuation on an
+// attack the player has already resolved, and anything longer starts reading
+// as a lingering hazard they ought to be dodging.
+const SHOT_BURST = 0.26;
 const ENEMY_ATTACK_REACH = 52;
 const ENEMY_ATTACK_ARC = Math.PI * 0.58;
 const ENEMY_AGGRO = 210;
@@ -480,7 +484,7 @@ function damagePlayer(sourceX, sourceY) {
 function spawnProjectile(enemy) {
   projectiles.push({
     x: enemy.x, y: enemy.y, previousX: enemy.x, previousY: enemy.y,
-    vx: enemy.attackDirectionX * 190, vy: enemy.attackDirectionY * 190, life: 2.4,
+    vx: enemy.attackDirectionX * 190, vy: enemy.attackDirectionY * 190, life: 3, burst: 0,
   });
 }
 
@@ -699,22 +703,51 @@ function updateEnemies(dt) {
   enemies = enemies.filter(enemy => enemy.health || enemy.death > 0);
 }
 
+/**
+ * Stop a bolt where it landed and let it come apart. Kept in the projectile
+ * list rather than promoted to a particle system of its own: a burst is a dead
+ * bolt, it needs exactly the position the bolt already had, and one more field
+ * is a great deal cheaper than a second array with its own lifecycle.
+ *
+ * Backed up a step first, so a bolt that met stone bursts against the face of
+ * it rather than a pixel inside it, and pinned to its own previous sample so
+ * the render does not interpolate the burst away from the impact.
+ */
+function burstProjectile(projectile, dt) {
+  projectile.x -= projectile.vx * dt;
+  projectile.y -= projectile.vy * dt;
+  projectile.previousX = projectile.x;
+  projectile.previousY = projectile.y;
+  projectile.burst = SHOT_BURST;
+  return true;
+}
+
 function updateProjectiles(dt) {
   projectiles = projectiles.filter(projectile => {
+    if (projectile.burst) {
+      projectile.burst -= dt;
+      return projectile.burst > 0;
+    }
     projectile.life -= dt;
     projectile.x += projectile.vx * dt;
     projectile.y += projectile.vy * dt;
     if (Math.hypot(projectile.x - player.x, projectile.y - player.y) < PLAYER_HALF + 5) {
       damagePlayer(projectile.x - projectile.vx, projectile.y - projectile.vy);
-      return false;
+      return burstProjectile(projectile, dt);
     }
     // Masonry eats the shot. The sight check stops a shrine firing at a wall
     // it is already looking at; this is what happens when the player ducks
     // behind one during the telegraph, and it is the better answer than
     // cancelling the wind-up — a Construct that has committed stays committed,
     // and stepping behind cover is a dodge the player earned.
-    if (!isWalkable(level, projectile.x, projectile.y)) return false;
-    return projectile.life > 0 && projectile.x > 0 && projectile.x < WORLD.width
+    if (!isWalkable(level, projectile.x, projectile.y)) return burstProjectile(projectile, dt);
+    // Running out of magic is an ending too. A bolt is fired from at most 280
+    // units away and the arena is enclosed, so most of them find masonry — but
+    // the ones that do not were popping out of existence in clear air halfway
+    // across the sand, which is the one moment the shot stops being an object.
+    // It gutters instead, and `life` is what tells the burst which death it is.
+    if (projectile.life <= 0) return burstProjectile(projectile, dt);
+    return projectile.x > 0 && projectile.x < WORLD.width
       && projectile.y > 0 && projectile.y < WORLD.height;
   });
 }
@@ -827,9 +860,12 @@ function drawShadow(x, y, radius, alpha = 0.22) {
  * rather than stroked as an arc: everything else on screen is a fillRect, and
  * one anti-aliased curve among them would be the only soft edge in the game.
  */
-function drawDisc(x, y, radius, colour, tear = 0) {
+function drawDisc(x, y, radius, colour, tear = 0, squash = MOTE_SQUASH) {
   ctx.fillStyle = colour;
-  const rows = Math.round(radius * MOTE_SQUASH);
+  // Ground-plane by default, because almost everything round in this game is
+  // lying on the floor. A shot is the exception: it is a ball travelling
+  // through the air, and flattening it would lay it down on the sand.
+  const rows = Math.round(radius * squash);
   for (let row = -rows; row <= rows; row++) {
     // `tear` chews the silhouette a pixel or two per row on a clock of its
     // own. A perfect ellipse is a thing someone carved; a ragged one is a
@@ -1072,9 +1108,14 @@ function drawEnemyAttack(enemy, x, y) {
   const flashX = pixelX(x + enemy.attackDirectionX * distance);
   const flashY = pixelY(y + enemy.attackDirectionY * distance);
   const size = 9 - (progress * 6 | 0);
-  ctx.fillStyle = '#ffc55c';
+  // Backed in ink before it is lit, like every other violet effect: the burst
+  // has to hold its shape over pale slab, where a mid-violet flash alone is
+  // barely a value step away from the stone it is drawn on.
+  ctx.fillStyle = '#213';
+  ctx.fillRect(flashX - (size >> 1) - 1, flashY - (size >> 1) - 1, size + 2, size + 2);
+  ctx.fillStyle = '#84e';
   ctx.fillRect(flashX - (size >> 1), flashY - (size >> 1), size, size);
-  ctx.fillStyle = HOT;
+  ctx.fillStyle = MAGIC_HOT;
   ctx.fillRect(flashX - (size >> 2), flashY - (size >> 2), size >> 1, size >> 1);
 }
 
@@ -1303,21 +1344,149 @@ function drawEnemy(enemy, x, y) {
   } else drawEnemyDeath(enemy, x, y);
 }
 
+/**
+ * A bolt coming apart on whatever stopped it.
+ *
+ * Two events in one, deliberately staggered rather than fading together: the
+ * head goes off as a flash that is over in the first third, and the debris it
+ * throws outlives it. Cross-fading the two instead gives a burst that only
+ * changes size, which reads as a shape being scaled rather than as something
+ * breaking — the eye needs the bright part gone before the dark part settles.
+ *
+ * Seeded from the impact coordinates, which are fixed for the burst's whole
+ * life because the bolt is pinned when it lands. No particle needs storing:
+ * where it broke is the only thing its shards ever needed to know.
+ */
+function drawBurst(projectile, x, y) {
+  const progress = 1 - projectile.burst / SHOT_BURST;
+  const seed = hash(projectile.x | 0, projectile.y | 0, 97);
+  // One shape at two energies, told apart by whether the bolt still had life
+  // left when it stopped — which costs no extra field, because a bolt that is
+  // bursting is never stepped again and its clock is frozen where it died.
+  //
+  // An impact goes off: the head opens wider than the bolt ever was, is gone
+  // inside the first third, and the debris is thrown hard. A fizzle is the
+  // same head shrinking away across the whole burst with its debris barely
+  // leaving, because nothing stopped this one — it ran out in the air.
+  const spent = projectile.life <= 0;
+  const force = spent ? 0.35 : 1;
+  // Shards first, so the flash covers the end they were thrown from. Fast out
+  // and easing, the way the gate wells throw their motes on an arrival.
+  //
+  // The whole spray is dragged back along the bolt's own heading as it opens.
+  // An even ring is what an explosion sitting on the ground looks like; this
+  // one was thrown at something and has to look like it was stopped, so half
+  // of it coming back off the stone is the part that says which way it was
+  // travelling. The velocity survives the impact purely to answer that — a
+  // bursting bolt returns before it is ever moved again.
+  const speed = Math.hypot(projectile.vx, projectile.vy) || 1;
+  const spread = progress * (2 - progress);
+  ctx.globalAlpha = Math.min(1, (1 - progress) * 2);
+  for (let shard = 0; shard < 9; shard++) {
+    const noise = hash(seed, shard, 41);
+    const angle = noise % 628 / 100;
+    // Small and thrown wide. Nine shards at four pixels apiece, each in its
+    // own ink ring, merge into one black lump before they have separated —
+    // the ring that keeps a single fleck legible becomes the thing that welds
+    // them together. Smaller flecks over a longer throw stay individually
+    // readable the whole way out, which is what makes it a spray.
+    const reach = (15 + noise % 28) * spread * force;
+    // Sizes mixed per shard as well as shrunk over time. Nine identical
+    // squares thrown from one point read as a pattern; the same nine at two
+    // sizes read as debris.
+    const size = 3 - (progress * 2 | 0) - (noise >>> 7 & 1);
+    const shardX = Math.round(x + Math.cos(angle) * reach - projectile.vx / speed * reach * 0.5);
+    const shardY = Math.round(y + (Math.sin(angle) * reach - projectile.vy / speed * reach * 0.5) * MOTE_SQUASH);
+    ctx.fillStyle = '#213';
+    ctx.fillRect(shardX - (size >> 1) - 1, shardY - (size >> 1) - 1, size + 2, size + 2);
+    // A few carry the hot core's colour outward. Debris entirely in the two
+    // dark violets reads as soot rather than as something still burning.
+    ctx.fillStyle = shard % 3 ? shard & 1 ? '#84e' : '#528' : MAGIC_HOT;
+    ctx.fillRect(shardX - (size >> 1), shardY - (size >> 1), size, size);
+  }
+  // The head letting go: opens wider than the bolt ever was, then collapses.
+  const flash = spent ? 1 - progress : Math.max(0, 1 - progress * 2.2);
+  if (!flash) {
+    ctx.globalAlpha = 1;
+    return;
+  }
+  // Kept smaller than the spray reaches, or the flash simply buries its own
+  // debris for as long as it lasts and the burst reads as one pulsing blob.
+  ctx.globalAlpha = flash;
+  drawDisc(x, y, 3 + flash * 8 * force, INK, 2, 1);
+  drawDisc(x, y, 2 + flash * 6 * force, '#528', 2, 1);
+  drawDisc(x, y, 1 + flash * 4 * force, '#84e', 0, 1);
+  const core = 1 + Math.round(flash * 3);
+  ctx.fillStyle = MAGIC_HOT;
+  ctx.fillRect(x - (core >> 1), y - (core >> 1), core, core);
+  ctx.globalAlpha = 1;
+}
+
+/**
+ * A shot: a knot of the same dark magic the gates are made of, torn loose and
+ * thrown.
+ *
+ * It used to be a gold dart with a white core, which put the enemy's only
+ * ranged threat squarely in the llamacorn's own warm spectrum — and the shot
+ * has to say whose it is before the player has finished reading where it is
+ * going. The wake is shed lumps rather than a drawn line for the same reason:
+ * a clean streak behind a bright head is a tracer round, and this is supposed
+ * to be something burning as it travels.
+ *
+ * The core stays bright regardless. However dark the magic is, this is the one
+ * object on screen the player is required to dodge, and it has to hold up over
+ * gold sand and pale slab alike.
+ */
 function drawProjectiles(alpha) {
+  // One clock for every shot on screen, so a volley crackles together rather
+  // than each bolt boiling to its own private rhythm.
+  const tick = gameTime * 20 | 0;
   for (const projectile of projectiles) {
     const x = projectile.previousX + (projectile.x - projectile.previousX) * alpha;
     const y = projectile.previousY + (projectile.y - projectile.previousY) * alpha;
+    if (projectile.burst) {
+      drawBurst(projectile, pixelX(x), pixelY(y));
+      continue;
+    }
     const speed = Math.hypot(projectile.vx, projectile.vy) || 1;
     const backX = -projectile.vx / speed;
     const backY = -projectile.vy / speed;
-    // A tail stepping down in width behind the head reads as a shot in flight.
-    // The bordered square this replaced read as an object hanging in mid-air.
-    drawBeam(x, y, backX, backY, 0, 8, [[5, INK], [3, '#ffc55c']]);
-    drawBeam(x, y, backX, backY, 8, 16, [[3, INK], [1, '#ffc55c']]);
-    ctx.fillStyle = '#fff3a6';
-    ctx.fillRect(pixelX(x) - 2, pixelY(y) - 2, 5, 5);
-    ctx.fillStyle = HOT;
-    ctx.fillRect(pixelX(x) - 1, pixelY(y) - 1, 3, 3);
+    // The wake is laid first so the head covers the end it hangs from. Each
+    // lump sits further back, smaller and thrown a little off the line of
+    // flight; re-rolling that offset a few times a second is what makes the
+    // trail writhe instead of trailing straight.
+    for (let wisp = 1; wisp < 6; wisp++) {
+      // Spaced closer than the lumps are wide, so the wake smears into one
+      // tapering body just behind the head and only breaks up into separate
+      // embers at the tail. Spaced wider it read as a dotted line, which is
+      // the tracer this was drawn to stop being.
+      const drift = hash(wisp, tick, 71) % 7 - 3;
+      const wispX = pixelX(x + backX * wisp * 5 - backY * drift);
+      const wispY = pixelY(y + backY * wisp * 5 + backX * drift);
+      const size = 7 - wisp;
+      ctx.globalAlpha = 0.9 - wisp * 0.15;
+      ctx.fillStyle = '#213';
+      ctx.fillRect(wispX - (size >> 1), wispY - (size >> 1), size, size);
+      // The trail cools as it falls behind: still lit just off the head, dead
+      // ash by the tail. A wake of one flat colour reads as a drawn line.
+      ctx.fillStyle = wisp < 2 ? '#84e' : wisp < 4 ? '#528' : '#213';
+      ctx.fillRect(wispX - (size >> 2), wispY - (size >> 2), size >> 1, size >> 1);
+    }
+    ctx.globalAlpha = 1;
+    // The head is a gate well in miniature: torn rim, dark socket, a mantle of
+    // charge, then the core. Sharing that construction is what makes a shot
+    // read as a piece of the portal it ultimately came out of.
+    const headX = pixelX(x);
+    const headY = pixelY(y);
+    // Sized just under the five units the shot actually hits at, so a near
+    // miss looks like one. Drawing it larger than its own hit radius is the
+    // one thing here that would make the dodge feel dishonest.
+    drawDisc(headX, headY, 6, INK, 1, 1);
+    drawDisc(headX, headY, 5, '#213', 1, 1);
+    drawDisc(headX, headY, 3, '#528', 0, 1);
+    drawDisc(headX, headY, 1 + (tick & 1), '#84e', 0, 1);
+    ctx.fillStyle = MAGIC_HOT;
+    ctx.fillRect(headX - 1, headY - 1, 2, 2);
   }
 }
 

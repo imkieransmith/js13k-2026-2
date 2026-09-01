@@ -60,6 +60,7 @@ registerHooks({
 });
 
 const calls = [];
+let paints = null;
 let gradientCount = 0;
 const renderTrace = createHash('sha256');
 const traceValue = value => typeof value === 'number' ? Number(value.toFixed(6))
@@ -105,6 +106,10 @@ function fakeContext() {
     fillRect(...args) {
       for (const value of args) assert.ok(Number.isFinite(value), `fillRect received ${value}`);
       calls.push(['fillRect', ...args]);
+      // Colour is only collected while a case has opened a bucket for it.
+      // Half a million rects go through here across a full run, and almost no
+      // assertion cares what any of them were painted with.
+      if (paints) paints.push([this.fillStyle, args[0] + args[2] / 2, args[1] + args[3] / 2]);
       trace('fillRect', args, [this.fillStyle, this.globalAlpha, this.globalCompositeOperation]);
     },
   };
@@ -336,7 +341,15 @@ assert.equal(smoke.state().projectiles.length, 1, 'Ranged windup did not emit a 
 step(40);
 state = smoke.state();
 assert.equal(state.player.health, 4, 'Projectile did not damage the player');
-assert.equal(state.projectiles.length, 0, 'Projectile survived player contact');
+// Contact consumes the bolt, but it is no longer removed on the frame it
+// lands: it stops where it hit and spends its burst there. What has to be
+// true is that it can never damage anything again, and that it does leave.
+assert.equal(state.projectiles.length, 1, 'A spent projectile did not stay to burst');
+assert.ok(state.projectiles[0].burst > 0, 'A projectile survived player contact still live');
+controls.player.invulnerability = 0;
+step(60);
+assert.equal(smoke.state().player.health, 4, 'A bursting projectile damaged the player a second time');
+assert.equal(smoke.state().projectiles.length, 0, 'A burst never expired');
 checkpoint('enemy-attacks');
 
 // Cover. The column drums on the sand are opaque to both sides: the geometry
@@ -385,6 +398,15 @@ covered = placeAcrossCover(1, true);
 Object.assign(covered, { windup: 0.001, attackDirectionX: 0, attackDirectionY: 1 });
 smoke.update(0.01);
 assert.equal(smoke.state().projectiles.length, 1, 'Committed ranged wind-up emitted no projectile');
+// It comes apart on the stone rather than blinking out, which means it stays
+// in the list — pinned, harmless, and still carrying the heading its spray is
+// thrown back along — until the burst is over.
+step(32);
+const spent = smoke.state().projectiles[0];
+assert.ok(spent && spent.burst > 0, 'A projectile vanished on impact instead of bursting');
+assert.ok(spent.y < 544, `A burst settled at y ${spent.y}, inside the stone rather than against its face`);
+assert.ok(spent.vy > 0, 'A burst discarded the heading its spray is thrown along');
+assert.ok(spent.life > 0, 'A bolt stopped by stone is indistinguishable from one that ran out');
 step(120);
 assert.equal(smoke.state().projectiles.length, 0, 'A projectile passed through a column drum');
 assert.equal(controls.player.health, 5, 'A projectile damaged the player through a column drum');
@@ -415,6 +437,72 @@ assert.ok(
   `A walker stalled ${Math.round(Math.hypot(covered.x - COVER_X, covered.y - 690))} units short of the player`,
 );
 checkpoint('cover');
+
+// A Construct's shot has to be visibly the Constructs' magic. The rainbow is
+// the llamacorn's — it is her mane, her tail, her dash trail and her laser —
+// so a bolt drawn in any of those bands reads at a glance as something she
+// fired, which is the one thing a projectile the player has to dodge must
+// never do. The bolt was gold and white before the arena had any violet
+// vocabulary to belong to; this is what stops it drifting back.
+isolate();
+controls.player.invulnerability = 0;
+Object.assign(controls.player, { x: 960, y: 736, previousX: 960, previousY: 736 });
+Object.assign(
+  controls.spawnEnemies([[660, 736, 1]], true)[0],
+  { mode: 1, birth: 0, windup: 0.001, attackDirectionX: 1, attackDirectionY: 0 },
+);
+smoke.update(0.01);
+const bolt = smoke.state().projectiles[0];
+assert.ok(bolt, 'Ranged wind-up emitted no projectile to inspect');
+// Fly it clear of the shrine that fired it, so a window round the bolt holds
+// the bolt and nothing else. It stays hundreds of units short of the player.
+step(60);
+const flown = smoke.state().projectiles[0];
+assert.ok(flown && flown.x - bolt.x > 60, 'Projectile did not travel clear of its shrine');
+paints = [];
+smoke.draw();
+const boltPaints = new Set(paints
+  .filter(([, x, y]) => Math.hypot(x - flown.x, y - flown.y) < 16)
+  .map(([paint]) => paint));
+paints = null;
+assert.ok(boltPaints.size, 'Nothing at all was drawn where the projectile is');
+// Ink and the Constructs' violets only. Listed rather than pattern-matched:
+// the point is that this set is small and deliberate.
+const CONSTRUCT_PAINT = new Set(['#1b1a2c', '#182129', '#213', '#528', '#84e', '#fdf']);
+for (const paint of boltPaints) {
+  assert.ok(CONSTRUCT_PAINT.has(paint), `A Construct's shot is painted ${paint}, which is not its magic`);
+}
+assert.ok(boltPaints.has('#84e'), 'A shot never lit a core, so it cannot read against dark ground');
+
+// Draw one frame while the muzzle burst is still live, which is the only pass
+// that puts `drawEnemyAttack` into the ordered render trace at all.
+const burst = Object.assign(
+  controls.spawnEnemies([[900, 736, 1]], true)[0],
+  { mode: 1, birth: 0, attackEffect: 0.16, attackDirectionX: 1, attackDirectionY: 0 },
+);
+smoke.draw();
+assert.ok(burst.attackEffect > 0, 'Muzzle burst expired before it could be drawn');
+checkpoint('shot-palette');
+
+// The other way a bolt can end. Most find masonry — the arena is enclosed and
+// a shrine only fires from inside 280 units — but one that misses in the open
+// used to blink out of existence mid-flight, which is the single moment the
+// shot stopped being an object. It gutters instead, and the burst tells the
+// two deaths apart by the clock the bolt died with: no field is spent on it,
+// because a bursting bolt is never stepped again.
+isolate();
+Object.assign(controls.player, { x: 960, y: 736, previousX: 960, previousY: 736 });
+// Aimed north, away from the player, into open sand well inside the podium.
+controls.projectiles().push({
+  x: 960, y: 640, previousX: 960, previousY: 640, vx: 0, vy: -190, life: 0.05, burst: 0,
+});
+step(8);
+const guttered = smoke.state().projectiles[0];
+assert.ok(guttered && guttered.burst > 0, 'A bolt that ran out of range vanished instead of guttering');
+assert.ok(guttered.life <= 0, 'A guttering bolt is indistinguishable from one that hit something');
+step(40);
+assert.equal(smoke.state().projectiles.length, 0, 'A guttering bolt never expired');
+checkpoint('shot-fizzle');
 
 // Authored enemies disengage outside their home leash, unlike arena enemies.
 isolate();
@@ -482,7 +570,7 @@ for (const [name, ...args] of calls) for (const value of args) if (typeof value 
 }
 const stateDigest = createHash('sha256').update(JSON.stringify(stateTrace)).digest('hex');
 const renderDigest = renderTrace.copy().digest('hex');
-assert.equal(stateDigest, '3756a2f3169c20ccd0c477c11c5ce73ace458eb03f19d96a9859476dcc1474e6', 'Gameplay characterisation changed; inspect mechanics before updating this digest');
-assert.equal(renderDigest, 'd2dbc4652b200b23ecf55d295c9b3241411496a04749f689bf1639026dcd9ee0', 'Ordered render commands changed; inspect intentional visuals before updating this digest');
+assert.equal(stateDigest, 'b2be6973b772e51d8ff108d1f6e81d889d7a6445240fd2fd6d9a76d45c7b9a46', 'Gameplay characterisation changed; inspect mechanics before updating this digest');
+assert.equal(renderDigest, 'a03689fda94f3d3754059f81112ed9adbdb7b3e37b2c95d11b5399670513e982', 'Ordered render commands changed; inspect intentional visuals before updating this digest');
 
 console.log(`game smoke passed (${frameCount} frames, ${calls.length} draw calls, terrain bake ${bakeMs}ms)`);
