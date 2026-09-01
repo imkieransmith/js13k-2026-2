@@ -406,6 +406,6 @@ for (const [name, ...args] of calls) for (const value of args) if (typeof value 
 const stateDigest = createHash('sha256').update(JSON.stringify(stateTrace)).digest('hex');
 const renderDigest = renderTrace.copy().digest('hex');
 assert.equal(stateDigest, 'd64594b6b3a7da707079f613c44556e0dcd82728d6d6583401e3d29eb78e4eec', 'Gameplay characterisation changed; inspect mechanics before updating this digest');
-assert.equal(renderDigest, 'c502ea44f5a63ccd5b27ed4589e2254f3e6420f5416f072e62153f8d01333a44', 'Ordered render commands changed; inspect intentional visuals before updating this digest');
+assert.equal(renderDigest, '75d185ef7d12760b77539d446af7c8eed01d5965a496cc02530e6ca8dd279f16', 'Ordered render commands changed; inspect intentional visuals before updating this digest');
 
 console.log(`game smoke passed (${frameCount} frames, ${calls.length} draw calls, terrain bake ${bakeMs}ms)`);

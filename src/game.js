@@ -766,11 +766,17 @@ function drawShadow(x, y, radius, alpha = 0.22) {
  * rather than stroked as an arc: everything else on screen is a fillRect, and
  * one anti-aliased curve among them would be the only soft edge in the game.
  */
-function drawDisc(x, y, radius, colour) {
+function drawDisc(x, y, radius, colour, tear = 0) {
   ctx.fillStyle = colour;
   const rows = Math.round(radius * MOTE_SQUASH);
   for (let row = -rows; row <= rows; row++) {
-    const half = Math.round(radius * Math.sqrt(1 - (row / (rows + 0.7)) ** 2));
+    // `tear` chews the silhouette a pixel or two per row on a clock of its
+    // own. A perfect ellipse is a thing someone carved; a ragged one is a
+    // thing that broke through, and the edge is where the whole difference
+    // lives — it is all of the shape the player actually sees against the
+    // pale slab it sits in.
+    const half = Math.round(radius * Math.sqrt(1 - (row / (rows + 0.7)) ** 2))
+      + tear * (hash(row, gameTime * 11 | 0, 53) % 3 - 1);
     ctx.fillRect(x - half, y + row, half * 2, 1);
   }
 }
@@ -790,36 +796,76 @@ function drawSpawner([x, y], index) {
   const flash = arena?.flash[index] || 0;
   const screenX = pixelX(x);
   const screenY = pixelY(y);
-  // Idle breathing, offset per gate. A dormant well still has to look awake
-  // without competing with whichever one is actually delivering an enemy.
-  const pulse = 0.5 + Math.sin(gameTime * 1.7 + index * 2) * 0.5;
-  const radius = 15 + pulse * 1.5 + flash * 9;
+  // Everything unsteady about the well is re-rolled a few times a second off
+  // one clock, never per frame. Per-frame noise reads as television static;
+  // at this rate the rim, the eye and the discharge all jump together, which
+  // reads as one thing failing to hold itself shut.
+  const tick = gameTime * 9 | 0;
+  const noise = hash(index, tick, 41);
+  // The idle beat is a snap, not a breath. Raising a sine to a high power
+  // leaves the gate dark for most of its cycle and slams it open for a
+  // fraction of one, which is the difference between a rune glowing and a
+  // wound pulsing — and it costs one character over the half-and-half.
+  const pulse = Math.sin(gameTime * 2.6 + index * 2) ** 6;
+  const radius = 15 + pulse * 4 + flash * 12;
+  const tear = 1 + Math.round(flash * 2);
   // Rim, socket, a ring of charge turning inside it, then the eye. The ring is
   // punched back out with the socket colour rather than stroked, which is the
   // same trick the Constructs' shells use to get a one-pixel outline: nothing
   // here is ever an outlined shape, only a smaller shape laid over a larger.
-  drawDisc(screenX, screenY, radius + 2, INK);
-  drawDisc(screenX, screenY, radius, '#213');
-  ctx.globalAlpha = 0.5 + pulse * 0.2 + flash * 0.3;
-  drawDisc(screenX, screenY, radius * 0.88, '#528');
+  // Only the outer three take the tear; chewing the inner ones as well turned
+  // the whole well to gravel and lost the eye entirely.
+  drawDisc(screenX, screenY, radius + 2, INK, tear);
+  drawDisc(screenX, screenY, radius, '#213', tear);
+  ctx.globalAlpha = 0.5 + pulse * 0.4 + flash * 0.3;
+  drawDisc(screenX, screenY, radius * 0.88, '#528', tear);
   ctx.globalAlpha = 1;
   drawDisc(screenX, screenY, radius * 0.66, '#213');
   // The eye is the Construct's own core colour, sitting in the ground waiting
-  // to be a Construct. It opens as the gate delivers.
+  // to be a Construct. It stutters a pixel off centre on the shared tick, so
+  // it never quite settles where the socket around it says it should be.
   ctx.globalAlpha = 0.55 + flash * 0.45;
-  drawDisc(screenX, screenY, radius * (0.26 + pulse * 0.05) + flash * 6, '#84e');
+  drawDisc(
+    screenX + noise % 3 - 1, screenY + (noise >>> 4) % 3 - 1,
+    radius * (0.24 + pulse * 0.14) + flash * 6, '#84e',
+  );
   ctx.globalAlpha = 0.5 + flash * 0.5;
   ctx.fillStyle = MAGIC_HOT;
   ctx.fillRect(screenX - 1, screenY - 1, 3, 2);
-  ctx.globalAlpha = 1;
+
+  // Discharge: three short spokes lashing out past the rim and gone again on
+  // the next tick. They are what stop the well reading as a decorative pool —
+  // it is doing damage to the ground it sits in. Kept short and stubby on
+  // purpose, because a long clean ray reads as a searchlight instead.
+  for (let arc = 0; arc < 4; arc++) {
+    const lash = hash(index, arc, tick);
+    const angle = lash % 628 / 100;
+    ctx.globalAlpha = 0.3 + flash * 0.55;
+    // Struck from just inside the rim outward, never from the centre: a spoke
+    // that starts at the middle lies across the eye and the well turns into a
+    // wheel. Cracking off the edge is what makes it look thrown.
+    drawBeam(
+      x, y, Math.cos(angle), Math.sin(angle) * MOTE_SQUASH,
+      radius * 0.86, radius * (1.16 + lash % 8 / 30) + flash * 7,
+      // Stepped by one, as every thin beam in the game is: at the default
+      // spacing a one-pixel core beads while its backing stays solid, and the
+      // spoke reads as a dark bar with dots on it rather than as a spark.
+      [[3, '#213'], [1, lash & 1 ? '#84e' : MAGIC_HOT]], 0, 1,
+    );
+  }
 
   // Motes wind inward and are swallowed, so a quiet gate reads as gathering
   // something rather than as a light left on. An arrival throws the same
   // spiral outward instead, which is the only cue the player needs.
+  //
+  // Neither trip is at an even speed. Squaring the inbound leg leaves a mote
+  // loitering at the rim and then yanks it through the last of the distance,
+  // and the outbound one is the same curve reversed so an arrival leaves as a
+  // burst rather than as a ring expanding politely.
   for (let mote = 0; mote < 7; mote++) {
-    const spin = (gameTime * 0.55 + mote / 7) % 1;
-    const reach = (flash ? spin : 1 - spin) * radius * 1.7;
-    const angle = mote * 2.24 + gameTime * (index & 1 ? -1.4 : 1.4);
+    const spin = (gameTime * 0.85 + mote / 7) % 1;
+    const reach = (flash ? spin * (2 - spin) : 1 - spin * spin) * radius * 1.9;
+    const angle = mote * 2.24 + gameTime * (index & 1 ? -2.3 : 2.3);
     const moteX = pixelX(x + Math.cos(angle) * reach);
     const moteY = pixelY(y + Math.sin(angle) * reach * MOTE_SQUASH);
     const size = 1 + (mote & 1);
