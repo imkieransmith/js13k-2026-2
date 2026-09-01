@@ -504,6 +504,65 @@ step(40);
 assert.equal(smoke.state().projectiles.length, 0, 'A guttering bolt never expired');
 checkpoint('shot-fizzle');
 
+// The beam eats bolts it passes through, and only those. Both halves matter:
+// a corridor that catches everything would make holding the trigger a shield,
+// and one that catches nothing is a beam visibly crossing a bolt that then
+// lands. Aimed west at a bolt closing from the west, with a second bolt on
+// the same heading but well off the axis as the control.
+isolate();
+controls.player.invulnerability = 0;
+controls.pointer.seen = false;
+Object.assign(controls.player, {
+  x: 960, y: 736, previousX: 960, previousY: 736, facingX: -1, facingY: 0,
+});
+// Three bolts on the same heading. The high one rides the beam itself, which
+// is drawn from the horn well above the player's centre; the middle one comes
+// in at chest height, under the beam near the muzzle; the low one is nowhere
+// near the rainbow and has to survive, or holding the trigger is a shield.
+const onBeam = { x: 820, y: 706, previousX: 820, previousY: 706, vx: 190, vy: 0, life: 3, burst: 0 };
+const onAxis = { x: 820, y: 736, previousX: 820, previousY: 736, vx: 190, vy: 0, life: 3, burst: 0 };
+const offAxis = { x: 820, y: 776, previousX: 820, previousY: 776, vx: 190, vy: 0, life: 3, burst: 0 };
+controls.projectiles().push(onBeam, onAxis, offAxis);
+controls.laser.charge = 5;
+controls.laser.held = true;
+step(4);
+assert.ok(controls.laser.active, 'Laser did not fire');
+assert.ok(onAxis.burst > 0, 'The beam passed through a bolt without stopping it');
+assert.ok(onAxis.life > 0, 'A bolt stopped by the beam guttered rather than bursting on it');
+assert.ok(onBeam.burst > 0, 'A bolt riding the drawn beam was not intercepted');
+assert.equal(offAxis.burst, 0, 'The beam ate a bolt well outside its corridor');
+
+// A burst caused by the beam has to be drawn over it. The beam is eleven
+// pixels of opaque rainbow laid on top of the world, so underneath it the
+// effect is swallowed in exactly the case it most needs to be seen. Compared
+// by index into one frame's fills: the burst's own violets at the bolt, and
+// the beam sampled further along its length where only the beam can be.
+paints = [];
+smoke.draw();
+const beamBeyond = paints.findLastIndex(([, px, py]) =>
+  Math.hypot(px - (onAxis.x - 60), py - onAxis.y) < 18);
+// Violets only, never the inks: the aim marker is drawn after the beam and
+// sits at exactly this distance in front of the player, and it is outlined in
+// the same INK the burst is. Matching on that made this pass whichever order
+// the two were drawn in, which is no assertion at all.
+const burstOver = paints.findLastIndex(([paint, px, py]) =>
+  ['#213', '#528', '#84e', '#fdf'].includes(paint)
+  && Math.hypot(px - onAxis.x, py - onAxis.y) < 24);
+paints = null;
+assert.ok(beamBeyond >= 0, 'Found no beam to compare the burst against');
+assert.ok(burstOver > beamBeyond, 'A burst the beam caused was drawn underneath it');
+controls.laser.held = false;
+step(120);
+// The eaten bolt never arrives; the one that passed beside the beam carries on
+// unharmed, which is what keeps holding the trigger from being a shield.
+assert.equal(controls.player.health, 5, 'A bolt the beam ate still reached the player');
+assert.ok(offAxis.x > 1000, `The off-axis bolt stopped at ${offAxis.x} instead of carrying on`);
+assert.ok(!controls.projectiles().includes(onBeam), 'The bolt riding the beam never left');
+// Identity has to come off the live array: `state()` hands back copies, so an
+// identity check against it can never fail and would assert nothing at all.
+assert.ok(!controls.projectiles().includes(onAxis), 'The intercepted bolt never left');
+checkpoint('laser-intercept');
+
 // Authored enemies disengage outside their home leash, unlike arena enemies.
 isolate();
 enemy = controls.spawnEnemies([[controls.player.x, controls.player.y, 0]])[0];
@@ -570,7 +629,7 @@ for (const [name, ...args] of calls) for (const value of args) if (typeof value 
 }
 const stateDigest = createHash('sha256').update(JSON.stringify(stateTrace)).digest('hex');
 const renderDigest = renderTrace.copy().digest('hex');
-assert.equal(stateDigest, 'b2be6973b772e51d8ff108d1f6e81d889d7a6445240fd2fd6d9a76d45c7b9a46', 'Gameplay characterisation changed; inspect mechanics before updating this digest');
-assert.equal(renderDigest, 'a03689fda94f3d3754059f81112ed9adbdb7b3e37b2c95d11b5399670513e982', 'Ordered render commands changed; inspect intentional visuals before updating this digest');
+assert.equal(stateDigest, '4b3cd56fd0910404c8e3a78470466fe296cb4e17f735e74f092876aab0edf0a9', 'Gameplay characterisation changed; inspect mechanics before updating this digest');
+assert.equal(renderDigest, 'ae76ff7c070cf435d0af158b8800cec93d4e256c461fce66fc2c4e14093ac777', 'Ordered render commands changed; inspect intentional visuals before updating this digest');
 
 console.log(`game smoke passed (${frameCount} frames, ${calls.length} draw calls, terrain bake ${bakeMs}ms)`);

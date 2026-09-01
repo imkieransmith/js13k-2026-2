@@ -558,6 +558,46 @@ function updateLaser(dt) {
     viewportReach(laser.directionX, laser.directionY, -8),
   );
   laser.charge = Math.max(0, laser.charge - dt);
+  // The beam eats what it passes through. This is not the panic button it
+  // looks like — the beam is a narrow corridor pointed one way, and bolts
+  // arriving from the other three gates are untouched — but the geometry is
+  // better than it sounds: a bolt aimed at the player travels down the line
+  // between them and whatever fired it, which is exactly where the beam is
+  // pointed to kill that thing. So it lands in the one exchange it should,
+  // and quietly rewards aiming at shrines rather than at walkers.
+  //
+  // It closes a hole as well. The beam already stops at masonry so it cannot
+  // kill what it never reached; passing through a bolt of dark magic and
+  // leaving it to land was the same lie told the other way round. The reach
+  // clamp is reused here, so a bolt behind a pillar stays safe for free.
+  //
+  // Deliberately silent: whatever is drawn here happens inside an eleven-pixel
+  // rainbow beam with a vignette and a zoom punch over the top of it, where
+  // nothing is visible. The feedback is that the bolt does not arrive.
+  // The beam is drawn from the horn, twenty-two units above the player's
+  // centre, converging back onto the centre line at its far end — so a
+  // corridor measured from the centre, as the sweep over enemies below is,
+  // sits under the beam near the muzzle and on it at the tip. Splitting the
+  // difference puts the test line through the middle of where the beam
+  // actually goes, and a symmetric corridor then covers the whole of it
+  // without also swallowing bolts a long way beneath.
+  //
+  // Matching the drawn line exactly is worse, not better: a bolt flying at the
+  // player's chest would pass cleanly under the beam until the far end, which
+  // is precisely backwards from what the shot is threatening.
+  const axisY = player.y - 11;
+  for (const projectile of projectiles) {
+    if (projectile.burst) continue;
+    const dx = projectile.x - player.x;
+    const dy = projectile.y - axisY;
+    const along = dx * laser.directionX + dy * laser.directionY;
+    const across = Math.abs(dx * laser.directionY - dy * laser.directionX);
+    // Half the horn offset, plus the beam's own half width, plus the bolt's
+    // radius: the distance at which a bolt is touching the rainbow anywhere
+    // along its length.
+    if (along < 0 || along > laser.reach || across > LASER_WIDTH + 16) continue;
+    burstProjectile(projectile, dt);
+  }
   for (const enemy of enemies) {
     if (!enemy.health || enemy.birth || enemy.laserCooldown) continue;
     const dx = enemy.x - player.x;
@@ -1437,14 +1477,17 @@ function drawBurst(projectile, x, y) {
  * object on screen the player is required to dodge, and it has to hold up over
  * gold sand and pale slab alike.
  */
-function drawProjectiles(alpha) {
+function drawProjectiles(alpha, bursting) {
   // One clock for every shot on screen, so a volley crackles together rather
   // than each bolt boiling to its own private rhythm.
   const tick = gameTime * 20 | 0;
   for (const projectile of projectiles) {
+    // Bolts in flight and bolts coming apart are drawn in separate passes at
+    // different depths, so this runs the list twice and skips the other kind.
+    if (bursting ? !projectile.burst : projectile.burst) continue;
     const x = projectile.previousX + (projectile.x - projectile.previousX) * alpha;
     const y = projectile.previousY + (projectile.y - projectile.previousY) * alpha;
-    if (projectile.burst) {
+    if (bursting) {
       drawBurst(projectile, pixelX(x), pixelY(y));
       continue;
     }
@@ -2051,7 +2094,9 @@ function draw() {
       enemy.previousY + (enemy.y - enemy.previousY) * alpha,
     );
   }
-  drawProjectiles(alpha);
+  // Bolts still travelling belong under the actors, so one passing behind a
+  // Construct goes behind it.
+  drawProjectiles(alpha, 0);
 
   // The director keeps this list bounded; proper feet-based ordering prevents
   // a lower character from disappearing behind one farther up the field.
@@ -2071,6 +2116,11 @@ function draw() {
   }
   drawLaser(playerX, playerY);
   drawAttack(playerX, playerY);
+  // Bursts go over the beam, because most of them are the beam's own doing and
+  // the beam is eleven pixels of opaque rainbow drawn on top of everything.
+  // Underneath it, a bolt the laser ate was swallowed whole in the one case
+  // the effect most needs to be seen — the thing the player just did.
+  drawProjectiles(alpha, 1);
   for (const actor of actors) {
     if (actor.enemy) drawImpact(actor.x, actor.y, actor.enemy.hitEffect, 0.16, '#fff3a6');
   }
