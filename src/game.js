@@ -431,6 +431,65 @@ const BEAM_CUTOFF = 1100;
 const BEAM_SWEEP = 700;
 const BEAM_RATE = 3;
 let beamVoice = null;
+// Background music: one looping tune, played on the same playNote every sound
+// effect uses, so it costs a scale, a string and a scheduler and no synth.
+//
+// The vibe is South American rather than toybox, which is four decisions:
+//
+// A minor pentatonic (A C D E G) instead of the major scale a toybox loop
+// reaches for. Andean music is pentatonic almost throughout, and the minor
+// set is the one that suits a ruin.
+//
+// A 6/8 lilt. The tune is a grid of eighth notes and the rests are half the
+// composition: a note followed by a rest rings on for two steps and a note
+// followed by a note gets one, so the bars come out long-short-long-short
+// instead of the even march that makes a loop sound like a music box.
+//
+// Parallel fifths under the melody. Siku and quena ensembles play in parallel
+// fourths and fifths rather than in harmony, and nothing else signposts the
+// region so cheaply — it is one extra note per step.
+//
+// And a modal bass on the first and fourth of each bar, walking Am Am Dm Am
+// G G Em Am, which never resolves the way a major key would.
+//
+// The tune is digits indexing SCALE, with 0 for a rest: a string of single
+// characters packs far smaller than a list of three-digit frequencies, and
+// the loop is 48 steps of 0.16s, so it comes round every 7.7 seconds.
+const SCALE = [0, 220, 262, 294, 330, 392, 440, 523, 587, 659];
+const TUNE = '908706706500678090807060506708908070605040600000';
+const BASS = '11315541';
+const MUSIC_STEP = .16;
+// Well under every effect in the game: music is the floor, not a voice in the
+// mix, and anything that has to be heard over it has to stay above it.
+const MUSIC_LEVEL = .013;
+let musicStep = 0, musicAt = 0;
+
+/**
+ * Scheduled on a short horizon rather than a note at a time. A tab left in the
+ * background stops getting frames but the audio clock keeps running, so
+ * catching up would queue every missed note at once and play the whole
+ * backlog in one chord; falling far behind resyncs instead.
+ */
+function scheduleMusic() {
+  if (!audio || audio.state !== 'running') return;
+  const now = audio.currentTime;
+  if (!musicAt || musicAt < now - .1) musicAt = now + .05;
+  while (musicAt < now + .25) {
+    const beat = musicStep++ % TUNE.length;
+    const note = SCALE[TUNE[beat]];
+    if (note) {
+      playNote(note, musicAt, .34, MUSIC_LEVEL, 3, note, .02);
+      playNote(note / 1.5, musicAt, .34, MUSIC_LEVEL * .6, 3, note / 1.5, .03);
+    }
+    // The first and fourth eighth of each bar, which is where 6/8 leans.
+    if (beat % 3 === 0) {
+      const root = SCALE[BASS[beat / 6 | 0]] / 2;
+      playNote(root, musicAt, .46, MUSIC_LEVEL * .85, 2, root, .012);
+    }
+    musicAt += MUSIC_STEP;
+  }
+}
+
 
 /** Start or release the sustained beam. Idempotent, so callers need not track it. */
 function setBeam(on) {
@@ -2462,6 +2521,7 @@ function frame(now) {
     accumulator -= FIXED_STEP;
   }
   draw();
+  scheduleMusic();
   requestAnimationFrame(frame);
 }
 

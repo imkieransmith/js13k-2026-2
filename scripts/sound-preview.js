@@ -27,6 +27,11 @@ const BEAM_CUTOFF = constant('BEAM_CUTOFF');
 const BEAM_SWEEP = constant('BEAM_SWEEP');
 const BEAM_RATE = constant('BEAM_RATE');
 const NOISE_Q = constant('NOISE_Q');
+const SCALE = constant('SCALE');
+const TUNE = constant('TUNE');
+const BASS = constant('BASS');
+const MUSIC_STEP = constant('MUSIC_STEP');
+const MUSIC_LEVEL = constant('MUSIC_LEVEL');
 
 // Seeded, so two renders of the same recipe are comparable sample for sample
 // and a measured difference is always a change to the recipe.
@@ -136,6 +141,23 @@ function renderBeam(buffer, at, seconds) {
     BEAM_CUTOFF + Math.sin(index / RATE * BEAM_RATE * Math.PI * 2) * BEAM_SWEEP, 3);
 }
 
+/** The looping tune, laid out exactly as scheduleMusic lays it out. */
+function renderMusic(buffer, at, seconds) {
+  for (let step = 0; step * MUSIC_STEP < seconds; step++) {
+    const start = at + step * MUSIC_STEP;
+    const beat = step % TUNE.length;
+    const pitch = SCALE[TUNE[beat]];
+    if (pitch) {
+      note(buffer, pitch, start, 0.34, MUSIC_LEVEL, 'triangle', pitch, 0.02);
+      note(buffer, pitch / 1.5, start, 0.34, MUSIC_LEVEL * 0.6, 'triangle', pitch / 1.5, 0.03);
+    }
+    if (beat % 3 === 0) {
+      const root = SCALE[BASS[beat / 6 | 0]] / 2;
+      note(buffer, root, start, 0.46, MUSIC_LEVEL * 0.85, 'sawtooth', root, 0.012);
+    }
+  }
+}
+
 function encodeWav(samples) {
   const header = Buffer.alloc(44);
   const body = Buffer.alloc(samples.length * 2);
@@ -161,6 +183,16 @@ function encodeWav(samples) {
 }
 
 const [, , outPath = 'dist/sounds.wav', only] = process.argv;
+// Two loops of the tune on its own, so it can be judged as a loop — whether
+// it wears out, and whether the seam between one pass and the next shows.
+if (only === 'music') {
+  const seconds = TUNE.length * MUSIC_STEP * 2;
+  const track = new Float64Array(Math.ceil((seconds + 1) * RATE));
+  renderMusic(track, 0.2, seconds);
+  writeFileSync(outPath, encodeWav(track));
+  console.log(`${outPath}: ${(seconds / 2).toFixed(2)}s loop, played twice`);
+  process.exit(0);
+}
 // `hold` is not in the table — it is the sustained beam, previewed on its own.
 const wantsBeam = !only || only === 'hold';
 const names = !only ? Object.keys(SOUNDS) : only === 'hold' ? [] : [only];

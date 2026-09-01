@@ -798,7 +798,10 @@ now += 500;
 notes.length = 0;
 controls.held.add('KeyD');
 runFrames(72);
-const footfalls = new Set(notes.map(note => note.at)).size;
+// Filtered to noise voices because the music is scheduled from the same
+// frame loop and is entirely tonal, so counting every voice would count the
+// tune. Both of the hoof's rows are noise and share one start time.
+const footfalls = new Set(notes.filter(note => note.wave === 'noise').map(note => note.at)).size;
 assert.ok(footfalls > 2 && footfalls < 9, `1.2s of trotting made ${footfalls} footfalls`);
 
 // And a llamacorn standing still is silent. Two separate things already
@@ -809,7 +812,20 @@ controls.held.clear();
 runFrames(30);
 notes.length = 0;
 runFrames(72);
-assert.equal(notes.length, 0, 'A llamacorn standing still went on making footsteps');
+assert.equal(
+  notes.filter(note => note.wave === 'noise').length, 0,
+  'A llamacorn standing still went on making footsteps',
+);
+
+// The music schedules on a short horizon rather than a note at a time. A tab
+// left in the background stops getting frames while the audio clock keeps
+// running, so catching up would queue every missed note at once and play the
+// whole backlog as one chord the moment the tab came back.
+notes.length = 0;
+now += 8000;
+runFrames(1);
+assert.ok(notes.length, 'The music never played');
+assert.ok(notes.length < 12, `Coming back to a hidden tab queued ${notes.length} music voices at once`);
 
 // A dash is its own sound, and it is the one movement effect that is not the
 // ground: it has to fire on the launch itself rather than on anything the
@@ -818,6 +834,6 @@ notes.length = 0;
 assert.ok(dispatchGlobal('keydown', { code: 'Space', repeat: false }));
 runFrames(2);
 dispatchGlobal('keyup', { code: 'Space' });
-assert.ok(notes.length, 'Dashing was silent');
+assert.ok(notes.some(note => note.wave === 'noise'), 'Dashing was silent');
 
 console.log(`game smoke passed (${frameCount} frames, ${calls.length} draw calls, terrain bake ${bakeMs}ms)`);
